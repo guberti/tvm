@@ -164,6 +164,7 @@ stage('Build') {
     node('GPUBUILD') {
       ws(per_exec_ws("tvm/build-gpu")) {
         init_git()
+        sh "nvidia-smi"
         sh "${docker_run} ${ci_gpu} ./tests/scripts/task_config_build_gpu.sh"
         make(ci_gpu, 'build', '-j2')
         pack_lib('gpu', tvm_multilib)
