@@ -11,7 +11,7 @@ mod, params = relay.frontend.from_tflite(
     tflite_model, shape_dict={"input": (1, 32, 32, 3)}, dtype_dict={"input": "int8"}
 )
 
-target = "c"
+target = tvm.target.target.micro("nrf5340dk")
 with tvm.transform.PassContext(opt_level=3, config={"tir.disable_vectorize": True}):
     mod = relay.build(mod, target, params=params)
 tvm.micro.export_model_library_format(mod, "output.tar")
