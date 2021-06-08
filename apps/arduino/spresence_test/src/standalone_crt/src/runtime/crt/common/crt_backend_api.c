@@ -63,3 +63,7 @@ int TVMBackendParallelLaunch(FTVMParallelLambda flambda, void* cdata, int num_ta
 int TVMBackendRegisterSystemLibSymbol(const char* name, void* ptr) {
   return TVMFuncRegisterGlobal(name, ptr, 0);
 }
+
+void TVMLogf(const char* format, ...) {
+
+}

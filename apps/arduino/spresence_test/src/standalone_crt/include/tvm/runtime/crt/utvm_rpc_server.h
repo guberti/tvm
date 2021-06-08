@@ -27,7 +27,7 @@
 
 #include <stdlib.h>
 #include <sys/types.h>
-#include <tvm/runtime/crt/error_codes.h>
+#include "error_codes.h"
 
 #ifdef __cplusplus
 extern "C" {
