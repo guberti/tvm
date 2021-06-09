@@ -31,7 +31,7 @@ typedef uint16_t     wchar_t;
 #include "../../../../include/tvm/runtime/crt/page_allocator.h"
 #include "../../../../include/tvm/runtime/crt/platform.h"
 
-#include "../../../../template/host/crt_config.h"
+#include "../../../../../../crt_config.h"
 
 void* TVMBackendAllocWorkspace(int device_type, int device_id, uint64_t nbytes, int dtype_code_hint,
                                int dtype_bits_hint) {

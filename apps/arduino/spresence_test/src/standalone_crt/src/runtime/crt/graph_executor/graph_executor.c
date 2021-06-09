@@ -33,7 +33,7 @@ typedef uint16_t     wchar_t;
 #include "../../../../include/tvm/runtime/crt/packed_func.h"
 #include "../../../../include/tvm/runtime/crt/page_allocator.h"
 
-#include "../../../../template/host/crt_config.h"
+#include "../../../../../../crt_config.h"
 
 #ifndef MAX
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))

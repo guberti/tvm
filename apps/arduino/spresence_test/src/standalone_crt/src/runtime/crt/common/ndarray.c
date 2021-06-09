@@ -28,7 +28,7 @@
 #include "../../../../include/tvm/runtime/crt/page_allocator.h"
 #include "../../../../include/tvm/runtime/crt/platform.h"
 
-#include "../../../../template/host/crt_config.h"
+#include "../../../../../../crt_config.h"
 
 int TVMNDArray_Create(int32_t ndim, const tvm_index_t* shape, DLDataType dtype, DLDevice dev,
                       TVMNDArray* array) {

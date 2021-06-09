@@ -23,7 +23,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "../../../../template/host/crt_config.h"
+#include "../../../../../../crt_config.h"
 #include "error_codes.h"
 
 #define STACK_ALLOCATOR_TAG 0xabcd1234

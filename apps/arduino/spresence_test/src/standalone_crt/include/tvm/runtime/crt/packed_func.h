@@ -31,7 +31,8 @@
 #include "module.h"
 #include "platform.h"
 
-#include "../../../../template/host/crt_config.h"
+// TODO make this not awful
+#include "../../../../../../crt_config.h"
 
 DLDataType String2DLDataType(const char* s);
 

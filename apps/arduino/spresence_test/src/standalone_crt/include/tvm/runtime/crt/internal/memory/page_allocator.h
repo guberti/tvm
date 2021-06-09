@@ -30,7 +30,7 @@
 #include "../../error_codes.h"
 #include "../../page_allocator.h"
 
-#include "../../../../../../template/host/crt_config.h"
+#include "../../../../../../../../crt_config.h"
 
 #ifdef __cplusplus
 extern "C" {
