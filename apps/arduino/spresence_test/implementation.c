@@ -54,6 +54,16 @@ tvm_crt_error_t TVMPlatformTimerStart() {
   return kTvmErrorNoError;
 }
 
+tvm_crt_error_t TVMPlatformTimerStop(double* elapsed_time_seconds) {
+  if (!g_utvm_timer_running) {
+    return kTvmErrorPlatformTimerBadState;
+  }
+  g_utvm_timer_running = 0;
+  unsigned long g_utvm_stop_time = micros() - g_utvm_start_time;
+  *elapsed_time_seconds = ((double) g_utvm_stop_time) / 1e6;
+  return kTvmErrorNoError;
+}
+
 unsigned int random_seed = 0;
 tvm_crt_error_t TVMPlatformGenerateRandom(uint8_t* buffer, size_t num_bytes) {
   for (size_t i = 0; i < num_bytes; ++i) {
