@@ -11,6 +11,7 @@ typedef uint16_t     wchar_t;
 #include "src/standalone_crt/include/tvm/runtime/crt/packed_func.h"
 
 #include "crt_config.h"
+#include "debug_print.h"
 
 size_t TVMPlatformFormatMessage(char* out_buf, size_t out_buf_size_bytes, const char* fmt,
                                 va_list args) {
@@ -18,6 +19,7 @@ size_t TVMPlatformFormatMessage(char* out_buf, size_t out_buf_size_bytes, const 
 }
 
 void TVMPlatformAbort(tvm_crt_error_t error) {
+  serial_printf("Running TVMPlatformAbort");
   for (;;)
     ;
 }

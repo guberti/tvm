@@ -34,6 +34,7 @@ typedef uint16_t     wchar_t;
 #include "../../../../include/tvm/runtime/crt/page_allocator.h"
 
 #include "../../../../../../crt_config.h"
+#include "../../../../../../debug_print.h"
 
 #ifndef MAX
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
@@ -102,6 +103,10 @@ void TVMGraphExecutorNode_LoadAttrs(TVMGraphExecutorNode* node, JSONReader* read
     } else if (!strcmp(key, "flatten_data")) {
       param->flatten_data = strtoul(value, 0, 10);
       bitmask |= 8;
+    } else if (!strcmp(key, "out_layout")) {
+    } else if (!strcmp(key, "hash")) {
+    } else if (!strcmp(key, "kernel_layout")) {
+    } else if (!strcmp(key, "data_layout")) {
     } else {
       fprintf(stderr, "do not support key %s", key);
     }
@@ -132,7 +137,7 @@ int TVMGraphExecutorNode_Load(TVMGraphExecutorNode* node, JSONReader* reader) {
       }
       bitmask |= 2;
     } else if (!strcmp(key, "inputs")) {
-      size_t count = node->inputs_count;
+      size_t count = 0; // TODO make a PR
       reader->BeginArray(reader);
       size_t num_inputs = 0;
       if (reader->ArrayLength(reader, &num_inputs) != 0) {
@@ -881,9 +886,6 @@ void TVMGraphExecutor_Run(TVMGraphExecutor* executor) {
   uint32_t idx;
   for (idx = 0; idx < executor->op_execs_count; ++idx) {
     if (executor->op_execs[idx].fexec) {
-#if TVM_CRT_DEBUG
-      printf("calling: %s (%d)\n", executor->op_execs[idx].name, idx);
-#endif  // TVM_CRT_DEBUG
       executor->op_execs[idx].Call(&(executor->op_execs[idx]));
     }
   }
@@ -897,6 +899,10 @@ void TVMGraphExecutor_Run(TVMGraphExecutor* executor) {
 int TVMGraphExecutor_GetNumOutputs(TVMGraphExecutor* executor) { return executor->outputs_count; }
 
 int TVMGraphExecutor_GetOutput(TVMGraphExecutor* executor, const int32_t idx, DLTensor* out) {
+  int outputs = TVMGraphExecutor_GetNumOutputs(executor);
+  serial_printf("Num output tensors: %d\n", outputs);
+  serial_printf("Size of output tensor array: %d\n", sizeof(executor->outputs));
+
   int status = 0;
   uint32_t nid = executor->outputs[idx].node_id;
   uint32_t index = executor->outputs[idx].index;
@@ -1093,6 +1099,9 @@ int TVMGraphExecutor_SetupOpExecs(TVMGraphExecutor* executor) {
       TVMGraphExecutor_CreateTVMOp(executor, &(inode->param), args, args_count, inode->inputs_count,
                                    &pf);
       executor->op_execs[nid] = pf;
+    } else {
+      //memset(&executor->op_execs, 0, sizeof(TVMPackedFunc) * executor->op_execs_count);
+      memset(&executor->op_execs[nid], 0, sizeof(TVMPackedFunc));
     }
   }
   return status;

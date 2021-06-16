@@ -27,6 +27,7 @@
 #include <string.h>
 #include "../../../../include/tvm/runtime/crt/logging.h"
 #include "../../../../include/tvm/runtime/crt/packed_func.h"
+#include "../../../../../../debug_print.h"
 
 DLDataType String2DLDataType(const char* s) {
   DLDataType t;
@@ -80,7 +81,7 @@ int TVMPackedFunc_InitGlobalFunc(TVMPackedFunc* pf, const char* name, const TVMA
 
   pf->Call = &TVMPackedFunc_Call;
   pf->SetArgs = &TVMPackedFunc_SetArgs;
-
+  serial_printf("Initialized global init func with name %s\n", name);
   status = TVMFuncGetGlobal(name, &pf->fexec);
   if (status != 0) {
     return status;
@@ -97,7 +98,8 @@ int TVMPackedFunc_InitModuleFunc(TVMPackedFunc* pf, TVMModuleHandle module, cons
 
   pf->Call = &TVMPackedFunc_Call;
   pf->SetArgs = &TVMPackedFunc_SetArgs;
-
+  serial_printf("Initialized module func with name %s \n", name);
+  serial_printf("Packed function address: %p\n", pf);
   status = TVMModGetFunction(module, name, 0, &pf->fexec);
   if (status != 0) {
     return status;

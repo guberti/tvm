@@ -6,10 +6,8 @@
 #include "src/standalone_crt/include/dlpack/dlpack.h"
 
 // Model
-//#include "src/inputs.c.inc"
 #include "src/graph_json.c"
-
-/*! \brief macro to do C API call */
+#include "Arduino.h"
 
 Tvmq::Tvmq()
 {
@@ -19,6 +17,8 @@ Tvmq::Tvmq()
   TVMPackedFunc pf;
   TVMArgs args = TVMArgs_Create(NULL, NULL, 0);
   TVMPackedFunc_InitGlobalFunc(&pf, "runtime.SystemLib", &args);
+  Serial.println("Starting program");
+  Serial.flush();
   TVMPackedFunc_Call(&pf);
 
   TVMModuleHandle mod_syslib = TVMArgs_AsModuleHandle(&pf.ret_value, 0);
@@ -36,11 +36,7 @@ Tvmq::Tvmq()
 }
 
 
-
-// Public Methods //////////////////////////////////////////////////////////////
-// Functions available in Wiring sketches, this library, and other libraries
-
-void Tvmq::inference(uint8_t input_data[3072], uint8_t output_data[10]) {
+void Tvmq::inference(uint8_t input_data[3072], int8_t *output_data) {
   // Reformat input data into tensor
   static const int64_t input_data_shape[4] = {1, 32, 32, 3};
   static const DLTensor input_data_tensor = {
@@ -51,12 +47,12 @@ void Tvmq::inference(uint8_t input_data[3072], uint8_t output_data[10]) {
     (void*) input_data_shape,
     NULL,    0};
 
+  // Run inputs through the model
+  TVMGraphExecutor_SetInput(graph_runtime, "input_1_int8", (DLTensor*) &input_data_tensor);
+  TVMGraphExecutor_Run(graph_runtime);
+
   // Prepare our output tensor
   int64_t output_data_shape[2] = {1, 10};
-  DLTensor output_data_tensor = {&output_data, {kDLCPU, 0}, 2, {kDLInt, 8, 0}, output_data_shape, NULL, 0};
-
-  // Run inputs through the model
-  TVMGraphExecutor_SetInput(graph_runtime, "data", (DLTensor*) &input_data_tensor);
-  TVMGraphExecutor_Run(graph_runtime);
+  DLTensor output_data_tensor = {output_data, {kDLCPU, 0}, 2, {kDLInt, 8, 0}, output_data_shape, NULL, 0};
   TVMGraphExecutor_GetOutput(graph_runtime, 0, &output_data_tensor);
 }
