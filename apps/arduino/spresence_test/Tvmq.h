@@ -9,6 +9,7 @@ class Tvmq
   public:
     Tvmq();
     void inference(uint8_t input_data[3072], int8_t *ext_output_data);
+    int infer_category(uint8_t input_data[3072]);
 
   private:
     TVMGraphExecutor* graph_runtime;

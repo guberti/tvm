@@ -769,7 +769,7 @@ int TVMGraphExecutor_GetInputIndex(TVMGraphExecutor* executor, const char* name)
 void TVMGraphExecutor_SetInput(TVMGraphExecutor* executor, const char* name, DLTensor* data_in) {
   uint32_t index = TVMGraphExecutor_GetInputIndex(executor, name);
   if (index >= executor->input_nodes_count) {
-    fprintf(stderr, "given index is greater than num of input nodes.\n");
+    serial_printf(stderr, "given index is greater than num of input nodes.\n");
   }
   uint32_t eid = TVMGraphExecutor_GetEntryId(executor, executor->input_nodes[index], 0);
   executor->data_entry[eid].dl_tensor.data = data_in->data;

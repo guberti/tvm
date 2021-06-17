@@ -1,6 +1,6 @@
 #include "Tvmq.h"
 #include <stdint.h>
-/*#include "src/automobile.c"
+#include "src/automobile.c"
 #include "src/airplane.c"
 #include "src/bird.c"
 #include "src/cat.c"
@@ -8,10 +8,21 @@
 #include "src/dog.c"
 #include "src/frog.c"
 #include "src/horse.c"
-#include "src/inputs.c"
-//#include "src/truck.c"*/
-#include "src/inputs.c"
+#include "src/ship.c"
+#include "src/truck.c"
 
+static char LABELS[10][10] = {
+  "AUTOMOBILE",
+  "AIRPLANE",
+  "BIRD",
+  "CAT",
+  "DEER",
+  "DOG",
+  "FROG",
+  "HORSE",
+  "SHIP",
+  "TRUCK",
+};
 
 void setup() {
   Serial.begin(9600);
@@ -20,12 +31,15 @@ void setup() {
   Tvmq t = Tvmq();
   Serial.println("Initialized tensor");
   Serial.flush();
-  int8_t output_data[10];
-  t.inference(input_data_data, output_data);
-
-  for (int i = 0; i < 10; i++) {
-    Serial.println(output_data[i]);
-  }
+  int category;
+  category = t.infer_category(input_ship);
+  Serial.print("Identified ship as: ");
+  Serial.println(LABELS[category]);
+  Serial.flush();
+  category = t.infer_category(input_cat);
+  Serial.print("Identified cat as: ");
+  Serial.println(LABELS[category]);
+  Serial.flush();
 }
 
 void loop() {
