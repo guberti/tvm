@@ -60,9 +60,9 @@ int Tvmq::infer_category(uint8_t input_data[3072]) {
   Tvmq::inference(input_data, output_data);
   int best = -1;
   int maximum = -1000;
-  Serial.println("Output tensor:");
+  //Serial.println("Output tensor:");
   for (int i = 0; i < 10; i++) {
-    Serial.println(output_data[i]);
+    //Serial.println(output_data[i]);
     if (output_data[i] > maximum) {
       maximum = output_data[i];
       best = i;

@@ -1,8 +1,8 @@
 #include "Arduino.h"
 
 extern "C" void serial_write(const char* data) {
-  Serial.write(data);
-  Serial.flush();
+  //Serial.write(data);
+  //Serial.flush();
 }
 
 extern "C" void serial_printf(const char* msg, ...) {
@@ -10,7 +10,7 @@ extern "C" void serial_printf(const char* msg, ...) {
   va_list args;
   va_start(args, msg);
   vsnprintf(buf, 256, msg, args);
-  Serial.write(buf);
+  //Serial.write(buf);
   va_end(args);
-  Serial.flush();
+  //Serial.flush();
 }
