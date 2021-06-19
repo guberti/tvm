@@ -1,4 +1,5 @@
-#include "Tvmq.h"
+#include "Model.h"
+#include "Parameters.h"
 #include "src/standalone_crt/include/tvm/runtime/crt/logging.h"
 #include "src/standalone_crt/include/tvm/runtime/crt/crt.h"
 #include "src/standalone_crt/include/tvm/runtime/crt/packed_func.h"
@@ -9,7 +10,7 @@
 #include "src/graph_json.c"
 #include "Arduino.h"
 
-Tvmq::Tvmq()
+Model::Model()
 {
   tvm_crt_error_t ret = TVMInitializeRuntime();
 
@@ -34,30 +35,40 @@ Tvmq::Tvmq()
 }
 
 
-void Tvmq::inference(uint8_t input_data[3072], int8_t *output_data) {
+void Model::inference(void *input_data, void *output_data) {
   // Reformat input data into tensor
-  static const int64_t input_data_shape[4] = {1, 32, 32, 3};
   DLTensor input_data_tensor = {
-    (void*) input_data,
-    {kDLCPU, 0},
-    4,
-    {kDLInt, 8, 0},
-    (void*) input_data_shape,
-    NULL,    0};
+    input_data,
+    HARDWARE_DEVICE,
+    INPUT_DATA_DIMENSION,
+    INPUT_DATA_TYPE,
+    INPUT_DATA_SHAPE,
+    NULL,
+    0,
+  };
 
   // Run inputs through the model
   TVMGraphExecutor_SetInput(graph_runtime, "input_1_int8", (DLTensor*) &input_data_tensor);
   TVMGraphExecutor_Run(graph_runtime);
 
   // Prepare our output tensor
-  int64_t output_data_shape[2] = {1, 10};
-  DLTensor output_data_tensor = {output_data, {kDLCPU, 0}, 2, {kDLInt, 8, 0}, output_data_shape, NULL, 0};
+  DLTensor output_data_tensor = {
+    output_data, 
+    HARDWARE_DEVICE, 
+    OUTPUT_DATA_DIMENSION, 
+    OUTPUT_DATA_TYPE,
+    OUTPUT_DATA_SHAPE,
+    NULL,
+    0,
+  };
+
+  // Populate output tensor
   TVMGraphExecutor_GetOutput(graph_runtime, 0, &output_data_tensor);
 }
 
-int Tvmq::infer_category(uint8_t input_data[3072]) {
+int Model::infer_category(void *input_data) {
   int8_t output_data[10] = {0};
-  Tvmq::inference(input_data, output_data);
+  Model::inference(input_data, output_data);
   int best = -1;
   int maximum = -1000;
   //Serial.println("Output tensor:");

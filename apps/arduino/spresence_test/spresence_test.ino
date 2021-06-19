@@ -1,4 +1,4 @@
-#include "Tvmq.h"
+#include "Model.h"
 #include <Camera.h>
 #include <SDHCI.h> 
 #include <stdint.h>
@@ -20,7 +20,7 @@ static char LABELS[10][10] = {
 //// Global variables ////
 SDClass theSD;
 static uint8_t INPUT_BUF[3072];
-static Tvmq t;
+static Model model;
 int take_picture_count = 0;
 
 //// Function called by camera streaming ////
@@ -68,7 +68,7 @@ void CamCB(CamImage img) {
   }
 
   //// Perform inference ////
-  int category = t.infer_category(INPUT_BUF);
+  int category = model.infer_category(INPUT_BUF);
   
   Serial.print("Identified image as: ");
   Serial.println(LABELS[category]);
@@ -86,7 +86,7 @@ void CamCB(CamImage img) {
 
 void setup() {
   Serial.begin(9600);
-  t = Tvmq();
+  model = Model();
   theCamera.begin();
   theCamera.startStreaming(true, CamCB);
 }
