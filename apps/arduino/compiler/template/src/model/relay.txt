@@ -1,0 +1,51 @@
+def @main(%input_1_int8: Tensor[(1, 32, 32, 3), int8], %v_param_1: Tensor[(3, 3, 3, 16), int8], %v_param_2: Tensor[(16), int32], %v_param_3: Tensor[(3, 3, 16, 16), int8], %v_param_4: Tensor[(16), int32], %v_param_5: Tensor[(3, 3, 16, 16), int8], %v_param_6: Tensor[(16), int32], %v_param_11: Tensor[(1, 1, 16, 32), int8], %v_param_12: Tensor[(32), int32], %v_param_7: Tensor[(3, 3, 16, 32), int8], %v_param_8: Tensor[(32), int32], %v_param_9: Tensor[(3, 3, 32, 32), int8], %v_param_10: Tensor[(32), int32], %v_param_17: Tensor[(1, 1, 32, 64), int8], %v_param_18: Tensor[(64), int32], %v_param_13: Tensor[(3, 3, 32, 64), int8], %v_param_14: Tensor[(64), int32], %v_param_15: Tensor[(3, 3, 64, 64), int8], %v_param_16: Tensor[(64), int32], %v_param_19: Tensor[(10, 64), int8], %v_param_20: Tensor[(10), int32]) {
+  %0 = qnn.conv2d(%input_1_int8, %v_param_1, -128, 0, 1f, meta[relay.Constant][0], padding=[1, 1, 1, 1], channels=16, kernel_size=[3, 3], data_layout="NHWC", kernel_layout="HWIO", out_dtype="int32");
+  %1 = nn.bias_add(%0, %v_param_2, axis=3);
+  %2 = qnn.requantize(%1, meta[relay.Constant][1], 0, 0.0393936f, -128, axis=3, out_dtype="int8");
+  %3 = clip(%2, a_min=-128f, a_max=127f);
+  %4 = qnn.conv2d(%3, %v_param_3, -128, 0, 0.0393936f, meta[relay.Constant][2], padding=[1, 1, 1, 1], channels=16, kernel_size=[3, 3], data_layout="NHWC", kernel_layout="HWIO", out_dtype="int32");
+  %5 = nn.bias_add(%4, %v_param_4, axis=3);
+  %6 = qnn.requantize(%5, meta[relay.Constant][3], 0, 0.0762932f, -128, axis=3, out_dtype="int8");
+  %7 = clip(%6, a_min=-128f, a_max=127f);
+  %8 = qnn.conv2d(%7, %v_param_5, -128, 0, 0.0762932f, meta[relay.Constant][4], padding=[1, 1, 1, 1], channels=16, kernel_size=[3, 3], data_layout="NHWC", kernel_layout="HWIO", out_dtype="int32");
+  %9 = nn.bias_add(%8, %v_param_6, axis=3);
+  %10 = qnn.requantize(%9, meta[relay.Constant][5], 0, 0.104195f, 4, axis=3, out_dtype="int8");
+  %11 = qnn.add(%3, %10, 0.0393936f, -128, 0.104195f, 4, 0.0509457f, -128);
+  %12 = clip(%11, a_min=-128f, a_max=127f);
+  %13 = qnn.conv2d(%12, %v_param_11, -128, 0, 0.0509457f, meta[relay.Constant][6], strides=[2, 2], padding=[0, 0, 0, 0], channels=32, kernel_size=[1, 1], data_layout="NHWC", kernel_layout="HWIO", out_dtype="int32");
+  %14 = nn.bias_add(%13, %v_param_12, axis=3);
+  %15 = qnn.conv2d(%12, %v_param_7, -128, 0, 0.0509457f, meta[relay.Constant][8], strides=[2, 2], padding=[0, 0, 1, 1], channels=32, kernel_size=[3, 3], data_layout="NHWC", kernel_layout="HWIO", out_dtype="int32");
+  %16 = nn.bias_add(%15, %v_param_8, axis=3);
+  %17 = qnn.requantize(%16, meta[relay.Constant][9], 0, 0.0456728f, -128, axis=3, out_dtype="int8");
+  %18 = clip(%17, a_min=-128f, a_max=127f);
+  %19 = qnn.conv2d(%18, %v_param_9, -128, 0, 0.0456728f, meta[relay.Constant][10], padding=[1, 1, 1, 1], channels=32, kernel_size=[3, 3], data_layout="NHWC", kernel_layout="HWIO", out_dtype="int32");
+  %20 = nn.bias_add(%19, %v_param_10, axis=3);
+  %21 = qnn.requantize(%14, meta[relay.Constant][7], 0, 0.0447614f, -17, axis=3, out_dtype="int8");
+  %22 = qnn.requantize(%20, meta[relay.Constant][11], 0, 0.113119f, 4, axis=3, out_dtype="int8");
+  %23 = qnn.add(%21, %22, 0.0447614f, -17, 0.113119f, 4, 0.0532362f, -128);
+  %24 = clip(%23, a_min=-128f, a_max=127f);
+  %25 = qnn.conv2d(%24, %v_param_17, -128, 0, 0.0532362f, meta[relay.Constant][12], strides=[2, 2], padding=[0, 0, 0, 0], channels=64, kernel_size=[1, 1], data_layout="NHWC", kernel_layout="HWIO", out_dtype="int32");
+  %26 = nn.bias_add(%25, %v_param_18, axis=3);
+  %27 = qnn.conv2d(%24, %v_param_13, -128, 0, 0.0532362f, meta[relay.Constant][14], strides=[2, 2], padding=[0, 0, 1, 1], channels=64, kernel_size=[3, 3], data_layout="NHWC", kernel_layout="HWIO", out_dtype="int32");
+  %28 = nn.bias_add(%27, %v_param_14, axis=3);
+  %29 = qnn.requantize(%28, meta[relay.Constant][15], 0, 0.0284502f, -128, axis=3, out_dtype="int8");
+  %30 = clip(%29, a_min=-128f, a_max=127f);
+  %31 = qnn.conv2d(%30, %v_param_15, -128, 0, 0.0284502f, meta[relay.Constant][16], padding=[1, 1, 1, 1], channels=64, kernel_size=[3, 3], data_layout="NHWC", kernel_layout="HWIO", out_dtype="int32");
+  %32 = nn.bias_add(%31, %v_param_16, axis=3);
+  %33 = qnn.requantize(%26, meta[relay.Constant][13], 0, 0.0838583f, 38, axis=3, out_dtype="int8");
+  %34 = qnn.requantize(%32, meta[relay.Constant][17], 0, 0.217244f, -2, axis=3, out_dtype="int8");
+  %35 = qnn.add(%33, %34, 0.0838583f, 38, 0.217244f, -2, 0.127069f, -128);
+  %36 = clip(%35, a_min=-128f, a_max=127f);
+  %37 = cast(%36, dtype="int32");
+  %38 = nn.avg_pool2d(%37, pool_size=[8, 8], strides=[8, 8], padding=[0, 0, 0, 0], layout="NHWC");
+  %39 = cast(%38, dtype="int8");
+  %40 = reshape(%39, newshape=[-1, 64]);
+  %41 = reshape(%40, newshape=[-1, 64]);
+  %42 = qnn.dense(%41, %v_param_19, -128, 0, 0.127069f, 0.0305544f, units=10, out_dtype="int32");
+  %43 = nn.bias_add(%42, %v_param_20);
+  %44 = qnn.requantize(%43, 0.00388252f, 0, 0.171854f, 24, out_dtype="int8");
+  %45 = qnn.dequantize(%44, 0.171854f, 24);
+  %46 = nn.softmax(%45, axis=1);
+  qnn.quantize(%46, 0.00390625f, -128, out_dtype="int8")
+}
+
