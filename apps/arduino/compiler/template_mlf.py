@@ -39,6 +39,7 @@ def main():
     parser.add_argument('input', type=str, help='input tflite file')
     parser.add_argument('output', type=str, help='output Arduino project')
     parser.add_argument('--builddir', type=str, help='path to temporary build dir', default=temp_build_dir.name)
+    parser.add_argument('--crtdir', type=str, help='path to temporary build dir', default=temp_build_dir.name)
     args = parser.parse_args()
 
     compile_tflite_to_mlf(args)

@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import tarfile
 import tempfile
@@ -9,6 +10,10 @@ from string import Template
 import tvm
 from tvm import relay, micro
 import tflite
+
+# Unlike most C projects, the Arduino IDE will ONLY compile
+# code in the top level folder or the src/ subfolder. See
+# https://arduino.github.io/arduino-cli/latest/sketch-specification
 
 # Deleting the directory and remaking it screws with the Arduino IDE,
 # so we instead just delete the contents of the directory
@@ -38,11 +43,8 @@ def compile_tflite_to_mlf(args):
     tflite_model = tflite.Model.GetRootAsModel(tflite_model_buf, 0)
 
     # TODO update to be non-argument specific
-    mod, params = relay.frontend.from_tflite(
-        tflite_model,
-        shape_dict={"input": (1, 128, 128, 3)},
-        dtype_dict={"input": "int8"},
-    )
+    # Ask Josh about the TFLite importer
+    mod, params = relay.frontend.from_tflite(tflite_model)
 
     with tvm.transform.PassContext(opt_level=3, config={"tir.disable_vectorize": True}):
         mod = relay.build(mod, TARGET, params=params)
@@ -61,13 +63,15 @@ def _print_c_array(l):
     return "{" + c_arr_str[1:-1] + "}"
 
 
-DL_DATA_TYPE_REFERENCE = {
-    # To verify - is this right?
-    "uint8": "{kDLInt, 8, 0}",
-    "uint16": "{kDLInt, 16, 0}",
-    "uint32": "{kDLInt, 32, 0}",
-    "uint64": "{kDLInt, 64, 0}",
+def _print_c_str(s):
+    return '"{}"'.format(s)
 
+
+DL_DATA_TYPE_REFERENCE = {
+    "uint8": "{kDLUInt, 8, 0}",
+    "uint16": "{kDLUInt, 16, 0}",
+    "uint32": "{kDLUInt, 32, 0}",
+    "uint64": "{kDLUInt, 64, 0}",
     "int8": "{kDLInt, 8, 0}",
     "int16": "{kDLInt, 16, 0}",
     "int32": "{kDLInt, 32, 0}",
@@ -91,13 +95,21 @@ def disassemble_graph_json(obj):
         "output_data_dimension": len(graph_shapes[1][-1]),
         "output_data_shape": _print_c_array(graph_shapes[1][-1]),
         "output_data_type": DL_DATA_TYPE_REFERENCE[graph_types[1][-1]],
-        "input_layer_name": obj["nodes"][0]["name"],
+        "input_layer_name": _print_c_str(obj["nodes"][0]["name"]),
     }
 
 
-MLF_DEST_PATH = os.path.join("model", "src", "model")
-INO_FILE_PATH = "standalone_template.ino"
+GRAPH_JSON_TEMPLATE = 'static const char* graph_json = "{}";\n'
+def compile_graph_json(args, obj):
+    graph_json = json.dumps(obj).replace('"', '\\"')
+    output = GRAPH_JSON_TEMPLATE.format(graph_json)
+    graph_json_path = os.path.join(args.output, "src/model/graph_json.c")
+    with open(graph_json_path, "w") as out_file:
+        out_file.write(output)
 
+
+MLF_DEST_PATH = os.path.join("src", "model")
+INO_FILE_PATH = "standalone_template.ino"
 def copy_and_populate_template(args):
     # Remove existing folder, if present
     if os.path.exists(args.output):
@@ -113,6 +125,7 @@ def copy_and_populate_template(args):
     )
 
     # Copy compiled files from extracted MLF
+    # TODO don't copy graph.json, just add graph_json.c
     for source, dest in [
             ("runtime-config/graph/graph.json", "graph.json"),
             ("codegen/host/src/lib0.c", "lib0.c"),
@@ -123,17 +136,47 @@ def copy_and_populate_template(args):
             os.path.join(args.output, MLF_DEST_PATH, dest)
         )
 
-    # Load graph.json into memory and extract needed parameters
+    # Load graph.json, serialize to c format, and extact parameters
     with open(os.path.join(args.output, MLF_DEST_PATH, "graph.json")) as f:
         graph_data = json.load(f)
+    compile_graph_json(args, graph_data)
     template_values = disassemble_graph_json(graph_data)
 
     # Use extracted parameters to produce parameters.h
     with open(args.templateparams, 'r') as f:
         template_params = Template(f.read())
     parameters_h = template_params.substitute(template_values)
-    with open(os.path.join(args.output, "parameters.h"), "w") as out_file:
+    with open(os.path.join(args.output, "src/parameters.h"), "w") as out_file:
         out_file.write(parameters_h)
+
+
+IMPORT_REGEX = r'^#include[\s]+(?:<|")([0-9A-Za-z/\-_]+\.(?:h|cpp|c))(?:>|")'
+# TODO make this fix all imports, not just these few
+IMPORT_PATTERNS = {
+    "tvm/runtime/crt/module.h": '"../standalone_crt/include/tvm/runtime/crt/module.h"',
+    "tvm/runtime/c_runtime_api.h": '"../standalone_crt/include/tvm/runtime/c_runtime_api.h"',
+    "tvm/runtime/c_backend_api.h": '"../standalone_crt/include/tvm/runtime/c_backend_api.h"',
+}
+
+def redirect_imports(args, input_file_path):
+    file_path = os.path.join(args.output, input_file_path)
+    with open(file_path, 'r') as f:
+        c_file_lines = f.readlines()
+
+    check_is_import = re.compile(IMPORT_REGEX)
+    for i in range(len(c_file_lines)):
+        result = check_is_import.search(c_file_lines[i])
+        if result:
+            import_path = result.group(1)
+            if import_path in IMPORT_PATTERNS:
+                c_file_lines[i] = re.sub(
+                    r'("|<)' + import_path + r'("|>)',
+                    IMPORT_PATTERNS[import_path],
+                    c_file_lines[i],
+                )
+
+    with open(file_path, 'w') as f:
+        f.writelines(c_file_lines)
 
 
 TEMPLATE_DIR = "standalone_template"
@@ -153,6 +196,10 @@ def main():
     tarpath = compile_tflite_to_mlf(args)
     disassemble_mlf(args, tarpath)
     copy_and_populate_template(args)
+
+    # TODO make this better
+    redirect_imports(args, "src/model/lib0.c")
+    redirect_imports(args, "src/model/lib1.c")
     temp_build_dir.cleanup()
 
 
