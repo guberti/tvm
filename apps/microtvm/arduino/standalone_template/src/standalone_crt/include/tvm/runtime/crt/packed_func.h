@@ -30,6 +30,7 @@
 #include "../c_runtime_api.h"
 #include "module.h"
 #include "platform.h"
+#include "error_codes.h"
 
 // TODO make this not awful
 #include "../../../../../crt_config.h"

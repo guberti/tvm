@@ -8,12 +8,12 @@
 static const DLDevice HARDWARE_DEVICE = {kDLCPU, 0};
 
 static const int INPUT_DATA_DIMENSION = 4;
-static const int64_t INPUT_DATA_SHAPE[] = {1, 49, 10, 1};
+static int64_t INPUT_DATA_SHAPE[] = {1, 49, 10, 1};
 static const DLDataType INPUT_DATA_TYPE = {kDLInt, 8, 0};
 static const char* INPUT_LAYER = "input_1";
 
 static const int OUTPUT_DATA_DIMENSION = 2;
-static const int64_t OUTPUT_DATA_SHAPE[] = {1, 12};
+static int64_t OUTPUT_DATA_SHAPE[] = {1, 12};
 static const DLDataType OUTPUT_DATA_TYPE = {kDLInt, 8, 0};
 
 #endif

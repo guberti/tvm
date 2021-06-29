@@ -24,7 +24,6 @@
  * \brief Load graph from JSON file.
  */
 #include <assert.h>
-typedef uint16_t     wchar_t;
 #include <stdlib.h>
 #include <string.h>
 #include "../../../../include/tvm/runtime/crt/internal/graph_executor/load_json.h"

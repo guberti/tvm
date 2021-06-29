@@ -2,7 +2,6 @@
 #define IMPLEMENTATION
 
 #include <assert.h>
-typedef uint16_t     wchar_t;
 #include <stdio.h>
 
 #include "standalone_crt/include/tvm/runtime/crt/logging.h"
