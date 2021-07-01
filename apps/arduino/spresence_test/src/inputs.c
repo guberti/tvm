@@ -1,5 +1,5 @@
 #include <stdint.h>
-static const uint8_t input_data_data[3072] = {
+static uint8_t input_data_data[3072] = {
   0x9e,
   0x70,
   0x31,
