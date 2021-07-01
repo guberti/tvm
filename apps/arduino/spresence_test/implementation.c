@@ -1,10 +1,6 @@
 #ifndef IMPLEMENTATION
 #define IMPLEMENTATION
 
-#include <assert.h>
-typedef uint16_t     wchar_t;
-#include <stdio.h>
-
 #include "src/standalone_crt/include/tvm/runtime/crt/logging.h"
 #include "src/standalone_crt/include/tvm/runtime/crt/crt.h"
 #include "src/standalone_crt/include/tvm/runtime/crt/graph_executor.h"

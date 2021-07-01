@@ -38,13 +38,13 @@ Tvmq::Tvmq()
 
 void Tvmq::inference(uint8_t input_data[3072], int8_t *output_data) {
   // Reformat input data into tensor
-  static const int64_t input_data_shape[4] = {1, 32, 32, 3};
+  static int64_t input_data_shape[4] = {1, 32, 32, 3};
   static const DLTensor input_data_tensor = {
     (void*) input_data,
     {kDLCPU, 0},
     4,
     {kDLInt, 8, 0},
-    (void*) input_data_shape,
+    input_data_shape,
     NULL,    0};
 
   // Run inputs through the model
