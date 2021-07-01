@@ -20,7 +20,6 @@
 // LINT_C_FILE
 
 #include <assert.h>
-typedef uint16_t     wchar_t;
 #include <inttypes.h>
 #include <stdarg.h>
 #include <stdbool.h>

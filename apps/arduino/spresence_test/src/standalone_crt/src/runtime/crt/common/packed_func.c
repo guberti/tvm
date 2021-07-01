@@ -81,7 +81,6 @@ int TVMPackedFunc_InitGlobalFunc(TVMPackedFunc* pf, const char* name, const TVMA
 
   pf->Call = &TVMPackedFunc_Call;
   pf->SetArgs = &TVMPackedFunc_SetArgs;
-  serial_printf("Initialized global init func with name %s\n", name);
   status = TVMFuncGetGlobal(name, &pf->fexec);
   if (status != 0) {
     return status;
@@ -98,8 +97,6 @@ int TVMPackedFunc_InitModuleFunc(TVMPackedFunc* pf, TVMModuleHandle module, cons
 
   pf->Call = &TVMPackedFunc_Call;
   pf->SetArgs = &TVMPackedFunc_SetArgs;
-  serial_printf("Initialized module func with name %s \n", name);
-  serial_printf("Packed function address: %p\n", pf);
   status = TVMModGetFunction(module, name, 0, &pf->fexec);
   if (status != 0) {
     return status;

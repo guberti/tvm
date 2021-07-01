@@ -15,7 +15,6 @@ size_t TVMPlatformFormatMessage(char* out_buf, size_t out_buf_size_bytes, const 
 }
 
 void TVMPlatformAbort(tvm_crt_error_t error) {
-  serial_printf("Running TVMPlatformAbort");
   for (;;)
     ;
 }

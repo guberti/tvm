@@ -24,8 +24,6 @@
  * \brief wrap graph_executor into a TVMModule for use with RPC.
  */
 
-#include <assert.h>
-typedef uint16_t     wchar_t;
 #include "../../../../include/tvm/runtime/crt/func_registry.h"
 #include "../../../../include/tvm/runtime/crt/graph_executor.h"
 #include "../../../../include/tvm/runtime/crt/graph_executor_module.h"

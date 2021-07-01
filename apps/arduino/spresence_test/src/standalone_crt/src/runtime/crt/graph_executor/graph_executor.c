@@ -24,8 +24,6 @@
  * \brief implement graph executor in pure C
  */
 
-#include <assert.h>
-typedef uint16_t     wchar_t;
 #include "../../../../include/tvm/runtime/c_runtime_api.h"
 #include "../../../../include/tvm/runtime/crt/internal/graph_executor/graph_executor.h"
 #include "../../../../include/tvm/runtime/crt/logging.h"
@@ -900,9 +898,6 @@ int TVMGraphExecutor_GetNumOutputs(TVMGraphExecutor* executor) { return executor
 
 int TVMGraphExecutor_GetOutput(TVMGraphExecutor* executor, const int32_t idx, DLTensor* out) {
   int outputs = TVMGraphExecutor_GetNumOutputs(executor);
-  serial_printf("Num output tensors: %d\n", outputs);
-  serial_printf("Size of output tensor array: %d\n", sizeof(executor->outputs));
-
   int status = 0;
   uint32_t nid = executor->outputs[idx].node_id;
   uint32_t index = executor->outputs[idx].index;
