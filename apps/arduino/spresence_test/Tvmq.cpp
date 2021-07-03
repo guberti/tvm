@@ -51,8 +51,8 @@ void Tvmq::inference(uint8_t input_data[3072], int8_t *output_data) {
   TVMGraphExecutor_SetInput(graph_runtime, "input_1_int8", (DLTensor*) &input_data_tensor);
   TVMGraphExecutor_Run(graph_runtime);
 
-  // Prepare our output tensor
+  /*// Prepare our output tensor
   int64_t output_data_shape[2] = {1, 10};
   DLTensor output_data_tensor = {output_data, {kDLCPU, 0}, 2, {kDLInt, 8, 0}, output_data_shape, NULL, 0};
-  TVMGraphExecutor_GetOutput(graph_runtime, 0, &output_data_tensor);
+  TVMGraphExecutor_GetOutput(graph_runtime, 0, &output_data_tensor);*/
 }

@@ -14,8 +14,18 @@ size_t TVMPlatformFormatMessage(char* out_buf, size_t out_buf_size_bytes, const 
   return 0;
 }
 
+// SO WHAT HAPPENED?
+// On the 18th iteration through our list, we just run out of memory
+// It's an Arduino BLE, so memory is not expandable
+// i.e. I get to pound sand
+// Luckily, we wanted to use a smaller model anyway
+// Audio it is!
 void TVMPlatformAbort(tvm_crt_error_t error) {
-  for (;;)
+
+  for (;;) {
+    led_enable();
+    led_disable();
+  }
     ;
 }
 
@@ -23,6 +33,10 @@ void TVMPlatformAbort(tvm_crt_error_t error) {
 
 // Called by TVM to allocate memory.
 tvm_crt_error_t TVMPlatformMemoryAllocate(size_t num_bytes, DLDevice dev, void** out_ptr) {
+  // Malloc is called on the final iteration that causes problems
+  // Is a TVM Platform No Memory error created?
+  led_enable();
+  led_disable();
   if (num_bytes == 0) {
     num_bytes = sizeof(int);
   }

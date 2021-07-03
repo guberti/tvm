@@ -881,9 +881,17 @@ int TVMGraphExecutor_LoadParams(TVMGraphExecutor* executor, const char* param_bl
  */
 void TVMGraphExecutor_Run(TVMGraphExecutor* executor) {
   // setup the array and requirements.
+  // Somewhere in here is screwing up
   uint32_t idx;
+  // The 18th run through this loop is causing issues
   for (idx = 0; idx < executor->op_execs_count; ++idx) {
+    if (idx == 17) {
+      enable_debug();
+    }
     if (executor->op_execs[idx].fexec) {
+      led_enable();
+      led_disable();
+      // On the 18th time through this loop, something bad happens inside this function
       executor->op_execs[idx].Call(&(executor->op_execs[idx]));
     }
   }
