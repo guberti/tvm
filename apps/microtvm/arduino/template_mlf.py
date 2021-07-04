@@ -108,6 +108,11 @@ def compile_graph_json(args, obj):
         out_file.write(output)
 
 
+SKETCH_NAME_REGEX = r'.*/(.*)'
+def _get_sketch_name(args):
+    return re.search(SKETCH_NAME_REGEX, args.output).groups()[0]
+
+
 MLF_DEST_PATH = os.path.join("src", "model")
 INO_FILE_PATH = "standalone_template.ino"
 def copy_and_populate_template(args):
@@ -119,9 +124,10 @@ def copy_and_populate_template(args):
     shutil.copytree(args.templatedir, args.output)
 
     # Rename the .ino file to fit Arduino's convention
+    sketch_name = _get_sketch_name(args)
     os.rename(
         os.path.join(args.output, INO_FILE_PATH),
-        os.path.join(args.output, args.output + ".ino")
+        os.path.join(args.output, sketch_name + ".ino")
     )
 
     # Copy compiled files from extracted MLF
