@@ -885,12 +885,12 @@ void TVMGraphExecutor_Run(TVMGraphExecutor* executor) {
   uint32_t idx;
   // The 18th run through this loop is causing issues
   for (idx = 0; idx < executor->op_execs_count; ++idx) {
-    if (idx == 17) {
+    if (idx == 16) {
       enable_debug();
     }
+    led_enable();
+    led_disable();
     if (executor->op_execs[idx].fexec) {
-      led_enable();
-      led_disable();
       // On the 18th time through this loop, something bad happens inside this function
       executor->op_execs[idx].Call(&(executor->op_execs[idx]));
     }

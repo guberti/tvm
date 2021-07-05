@@ -23,8 +23,8 @@ size_t TVMPlatformFormatMessage(char* out_buf, size_t out_buf_size_bytes, const 
 void TVMPlatformAbort(tvm_crt_error_t error) {
 
   for (;;) {
-    led_enable();
-    led_disable();
+    //led_enable();
+    //led_disable();
   }
     ;
 }
@@ -35,8 +35,8 @@ void TVMPlatformAbort(tvm_crt_error_t error) {
 tvm_crt_error_t TVMPlatformMemoryAllocate(size_t num_bytes, DLDevice dev, void** out_ptr) {
   // Malloc is called on the final iteration that causes problems
   // Is a TVM Platform No Memory error created?
-  led_enable();
-  led_disable();
+  //led_enable();
+  //led_disable();
   if (num_bytes == 0) {
     num_bytes = sizeof(int);
   }

@@ -1,10 +1,12 @@
 #include "Tvmq.h"
-#include "src/inputs.c"
 
 void setup() {
   Tvmq t = Tvmq();
-  int8_t output_data[10];
-  t.inference(input_data_data, output_data);
+  uint8_t input_data[1960] = {0};
+  int8_t output_data[4];
+  t.inference(input_data, output_data);
+  Serial.begin(9600);
+  Serial.println("Finished inference");
 }
 
 void loop() {
