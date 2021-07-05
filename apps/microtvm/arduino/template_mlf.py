@@ -110,7 +110,10 @@ def compile_graph_json(args, obj):
 
 SKETCH_NAME_REGEX = r'.*/(.*)'
 def _get_sketch_name(args):
-    return re.search(SKETCH_NAME_REGEX, args.output).groups()[0]
+    if os.path.sep in args.output:
+        return re.search(SKETCH_NAME_REGEX, args.output).groups()[0]
+    else:
+        return args.output
 
 
 MLF_DEST_PATH = os.path.join("src", "model")
