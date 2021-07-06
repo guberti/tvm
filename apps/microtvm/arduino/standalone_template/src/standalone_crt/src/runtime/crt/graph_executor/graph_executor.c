@@ -24,8 +24,6 @@
  * \brief implement graph executor in pure C
  */
 
-#include <assert.h>
-typedef uint16_t     wchar_t;
 #include "../../../../include/tvm/runtime/c_runtime_api.h"
 #include "../../../../include/tvm/runtime/crt/internal/graph_executor/graph_executor.h"
 #include "../../../../include/tvm/runtime/crt/logging.h"

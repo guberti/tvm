@@ -1,26 +1,27 @@
 #ifndef IMPLEMENTATION
 #define IMPLEMENTATION
 
-#include <assert.h>
-typedef uint16_t     wchar_t;
-#include <stdio.h>
-
-#include "standalone_crt/include/tvm/runtime/crt/logging.h"
-#include "standalone_crt/include/tvm/runtime/crt/crt.h"
 #include "standalone_crt/include/tvm/runtime/crt/graph_executor.h"
-#include "standalone_crt/include/tvm/runtime/crt/packed_func.h"
-
-#include "crt_config.h"
+#include "Arduino.h"
 
 size_t TVMPlatformFormatMessage(char* out_buf, size_t out_buf_size_bytes, const char* fmt,
                                 va_list args) {
   return 0;
 }
 
+// Blink code for debugging purposes
 void TVMPlatformAbort(tvm_crt_error_t error) {
-  //serial_printf("Running TVMPlatformAbort");
-  for (;;)
-    ;
+  //pinMode(LED_BUILTIN, OUTPUT);
+  for (;;) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(250);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(250);
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(250);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(750);
+  }
 }
 
 // Heap for use by TVMPlatformMemoryAllocate.
