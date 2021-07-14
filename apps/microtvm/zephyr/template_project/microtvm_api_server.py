@@ -92,7 +92,7 @@ class CMakeCache(collections.abc.Mapping):
 
     def _read_cmake_cache(self):
         """Read a CMakeCache.txt-like file and return a dictionary of values."""
-        entries = collections.OrderedDict()
+        entries = collections.abc.OrderedDict()
         with open(self._path, encoding="utf-8") as f:
             for line in f:
                 m = CACHE_ENTRY_RE.match(line.rstrip("\n"))
