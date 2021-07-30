@@ -180,7 +180,6 @@ def test_tflite(platform, west_cmd, skip_build, tvm_debug):
     target = tvm.target.target.micro(
         model, options=["-link-params=1", "--executor=aot", "--unpacked-api=1"]
     )
-    print(target)
     with tvm.transform.PassContext(opt_level=3, config={"tir.disable_vectorize": True}):
         lowered = relay.build(relay_mod, target, params=params)
 
