@@ -1,11 +1,12 @@
 #ifndef IMPLEMENTATION_H_
 #define IMPLEMENTATION_H_
 
-#define WORKSPACE_SIZE 0
+#define WORKSPACE_SIZE $workspace_size_bytes
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 
 #include "standalone_crt/include/tvm/runtime/crt/logging.h"
 
