@@ -1,6 +1,8 @@
 #ifndef TVM_IMPLEMENTATION_ARDUINO
 #define TVM_IMPLEMENTATION_ARDUINO
 
+#include "stdarg.h"
+
 #include "model.h"
 
 #include "Arduino.h"
@@ -26,7 +28,10 @@ void TVMPlatformAbort(tvm_crt_error_t error) {
   }
 }
 
-void TVMLogf(const char* msg, ...) {}
+size_t TVMPlatformFormatMessage(char* out_buf, size_t out_buf_size_bytes, const char* fmt,
+                                va_list args) {
+  return vsnprintf(out_buf, out_buf_size_bytes, fmt, args);
+}
 
 tvm_crt_error_t TVMPlatformMemoryAllocate(size_t num_bytes, DLDevice dev, void** out_ptr) {
   return StackMemoryManager_Allocate(&app_workspace, num_bytes, out_ptr);
