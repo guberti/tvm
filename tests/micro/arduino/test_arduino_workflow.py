@@ -55,7 +55,7 @@ def _generate_project(model, target, arduino_board, arduino_cli_cmd, mod, build_
         str(template_project_dir),
         mod,
         workspace.relpath("project"),
-        {"arduino_board": arduino_board, "arduino_cli_cmd": arduino_cli_cmd, "verbose": 0},
+        {"arduino_board": arduino_board, "arduino_cli_cmd": arduino_cli_cmd, "project_type": "template_project", "verbose": 0},
     )
     return (workspace, project)
 

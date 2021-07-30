@@ -53,6 +53,11 @@ BOARD_PROPERTIES = {
     },
 }
 
+PROJECT_TYPES = [
+    "template_project",
+    "host_driven"
+]
+
 PROJECT_OPTIONS = [
     server.ProjectOption(
         "arduino_board",
@@ -61,6 +66,11 @@ PROJECT_OPTIONS = [
     ),
     server.ProjectOption("arduino_cli_cmd", help="Path to the arduino-cli tool."),
     server.ProjectOption("port", help="Port to use for connecting to hardware"),
+    server.ProjectOption(
+        "project_type",
+        help="Type of project to generate.",
+        choices=tuple(PROJECT_TYPES),
+    ),
     server.ProjectOption(
         "verbose", help="True to pass --verbose flag to arduino-cli compile and upload"
     ),
@@ -82,6 +92,12 @@ class Handler(server.ProjectAPIHandler):
             project_options=PROJECT_OPTIONS,
         )
 
+    def _copy_project_files(self, api_server_dir, project_dir, project_type):
+        project_types_folder = api_server_dir.parents[0]
+        shutil.copytree(project_types_folder / project_type / "src", project_dir / "src", dirs_exist_ok=True)
+        # Arduino requires the .ino file have the same filename as its containing folder
+        shutil.copy2(project_types_folder / project_type / "project.ino", project_dir / f"{project_dir.stem}.ino")
+
     CRT_COPY_ITEMS = ("include", "src")
 
     def _copy_standalone_crt(self, source_dir, standalone_crt_dir):
@@ -98,10 +114,7 @@ class Handler(server.ProjectAPIHandler):
     UNUSED_COMPONENTS = [
         "include/dmlc",
         "src/support",
-        "src/runtime/minrpc",
         "src/runtime/crt/graph_executor",
-        "src/runtime/crt/microtvm_rpc_common",
-        "src/runtime/crt/microtvm_rpc_server",
         "src/runtime/crt/tab",
     ]
 
@@ -192,11 +205,8 @@ class Handler(server.ProjectAPIHandler):
         # Copies files from the template folder to project_dir. model.h is copied here,
         # but will also need to be templated later.
         if IS_TEMPLATE:
-            shutil.copytree(API_SERVER_DIR / "src", source_dir, dirs_exist_ok=True)
             shutil.copy2(API_SERVER_DIR / "microtvm_api_server.py", project_dir)
-
-            # Arduino requires the .ino file have the same filename as its containing folder
-            shutil.copy2(API_SERVER_DIR / "project.ino", project_dir / f"{project_dir.stem}.ino")
+            self._copy_project_files(API_SERVER_DIR, project_dir, options["project_type"])
 
         # Copy standalone_crt into src folder
         self._copy_standalone_crt(source_dir, standalone_crt_dir)
