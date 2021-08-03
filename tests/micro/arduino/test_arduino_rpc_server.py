@@ -55,15 +55,7 @@ def _make_session(model, target, arduino_board, arduino_cli_cmd, mod, build_conf
     project.flash()
     return tvm.micro.Session(project.transport())
 
-
-# This is bad, don't do this
-#TARGET = "c -keys=cpu -executor=aot -link-params=1 -model=host -runtime=c -unpacked-api=1"
-
-# ZEPHYR TARGET STRING
-TARGET = "c -keys=cpu -link-params=1 -model=host -runtime=c -system-lib=1 -unpacked-api=1"
-
-# OLD GRAPH EXECUTOR TARGET STRING
-#TARGET = "c -keys=cpu -link-params=1 -mcpu=cortex-m33 -model=nrf5340dk -runtime=c -system-lib=1"
+TARGET = "c -keys=cpu -link-params=1 -model=host -runtime=c -system-lib=1 --interface-api=packed"
 
 def test_relay(platform, arduino_cli_cmd):
     """Testing a simple relay graph"""
