@@ -15,14 +15,13 @@ tvm_workspace_t app_workspace;
 // Blink code for debugging purposes
 void TVMPlatformAbort(tvm_crt_error_t error) {
   for (;;) {
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(250);
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(250);
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(250);
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(750);
+    for (int i = 0; i < error; i++) {
+      digitalWrite(LED_BUILTIN, HIGH);
+      delay(250);
+      digitalWrite(LED_BUILTIN, LOW);
+      delay(250);
+    }
+    delay(5000);
   }
 }
 

@@ -54,7 +54,7 @@ BOARD_PROPERTIES = {
 }
 
 PROJECT_TYPES = [
-    "template_project",
+    "example_project",
     "host_driven"
 ]
 
@@ -67,7 +67,7 @@ PROJECT_OPTIONS = [
     server.ProjectOption("arduino_cli_cmd", help="Path to the arduino-cli tool."),
     server.ProjectOption("port", help="Port to use for connecting to hardware"),
     server.ProjectOption(
-        "project_type",
+        "example_project",
         help="Type of project to generate.",
         choices=tuple(PROJECT_TYPES),
     ),
@@ -111,12 +111,24 @@ class Handler(server.ProjectAPIHandler):
             else:
                 shutil.copy2(src_path, dst_path)
 
-    UNUSED_COMPONENTS = [
-
+    # Example project is the "minimum viable project",
+    # and doesn't need a fancy RPC server
+    EXAMPLE_PROJECT_UNUSED_COMPONENTS = [
+        "include/dmlc",
+        "src/support",
+        "src/runtime/minrpc",
+        "src/runtime/crt/graph_executor",
+        "src/runtime/crt/microtvm_rpc_common",
+        "src/runtime/crt/microtvm_rpc_server",
+        "src/runtime/crt/tab",
     ]
 
-    def _remove_unused_components(self, source_dir):
-        for component in self.UNUSED_COMPONENTS:
+    def _remove_unused_components(self, source_dir, project_type):
+        unused_components = []
+        if project_type == "example_project":
+            unused_components = self.EXAMPLE_PROJECT_UNUSED_COMPONENTS
+
+        for component in unused_components:
             shutil.rmtree(source_dir / "standalone_crt" / component)
 
     def _disassemble_mlf(self, mlf_tar_path, source_dir):
@@ -239,7 +251,7 @@ class Handler(server.ProjectAPIHandler):
 
         # Copy standalone_crt into src folder
         self._copy_standalone_crt(source_dir, standalone_crt_dir)
-        self._remove_unused_components(source_dir)
+        self._remove_unused_components(source_dir, options["project_type"])
 
         # Unpack the MLF and copy the relevant files
         metadata = self._disassemble_mlf(model_library_format_path, source_dir)
@@ -364,7 +376,7 @@ class Handler(server.ProjectAPIHandler):
     def write_transport(self, data, timeout_sec):
         if self._serial is None:
             raise server.TransportClosedError()
-        return self._serial.write(data, timeout_sec)
+        return self._serial.write(data)
 
 
 if __name__ == "__main__":
