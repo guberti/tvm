@@ -27,8 +27,14 @@ RANLIB = ranlib
 CC_OPTS = CC=$(CC) AR=$(AR) RANLIB=$(RANLIB)
 
 PKG_CFLAGS = ${PKG_COMPILE_OPTS} \
-	-I$(build_dir)/../include \
-	-isystem$(STANDALONE_CRT_DIR)/include
+	-I$(TVM_ROOT)/src/runtime/crt/include \
+	-I$(TVM_ROOT)/src/runtime/crt/host \
+	-I$(TVM_ROOT)/include \
+	-I$(DMLC_CORE)/include \
+	-I$(TVM_ROOT)/3rdparty/dlpack/include \
+	-I$(AOT_ROOT)\
+	-I$(build_dir) \
+	-I$(CODEGEN_ROOT)/host/include
 
 $(ifeq VERBOSE,1)
 QUIET ?=

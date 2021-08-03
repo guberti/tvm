@@ -38,6 +38,7 @@ import tvm.relay as relay
 
 from tvm.contrib import utils
 from tvm.contrib.download import download_testdata
+from tvm.micro.interface_api import generate_c_interface_header
 
 import conftest
 
@@ -178,7 +179,7 @@ def test_tflite(platform, west_cmd, skip_build, tvm_debug):
     )
 
     target = tvm.target.target.micro(
-        model, options=["-link-params=1", "--executor=aot", "--unpacked-api=1"]
+        model, options=["-link-params=1", "--executor=aot", "--unpacked-api=1", "--interface-api=c"]
     )
     with tvm.transform.PassContext(opt_level=3, config={"tir.disable_vectorize": True}):
         lowered = relay.build(relay_mod, target, params=params)
@@ -190,6 +191,11 @@ def test_tflite(platform, west_cmd, skip_build, tvm_debug):
     )
     sample = np.load(sample_path)
     model_files_path = os.path.join(runtime_path, "include")
+    generate_c_interface_header(lowered.libmod_name, ["input_1"], ["output"], model_files_path)
+    _create_header_file((f"input_data"), sample, model_files_path)
+    _create_header_file(
+        "output_data", np.zeros(shape=output_shape, dtype="float32"), model_files_path
+    )
 
     with tempfile.NamedTemporaryFile() as temp_file:
         with tarfile.open(temp_file.name, "w:gz") as tf:
