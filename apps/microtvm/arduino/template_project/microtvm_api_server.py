@@ -41,6 +41,7 @@ class BoardAutodetectFailed(Exception):
 
 
 BOARD_PROPERTIES = {
+    # Tested and verified to work
     "spresense": {
         "package": "SPRESENSE",
         "architecture": "spresense",
@@ -50,6 +51,16 @@ BOARD_PROPERTIES = {
         "package": "arduino",
         "architecture": "mbed_nano",
         "board": "nano33ble",
+    },
+    "teensy40": {
+        "package": "teensy",
+        "architecture": "avr",
+        "board": "teensy40",
+    },
+    "teensy41": {
+        "package": "teensy",
+        "architecture": "avr",
+        "board": "teensy41",
     },
 }
 
@@ -132,18 +143,19 @@ class Handler(server.ProjectAPIHandler):
             shutil.rmtree(source_dir / "standalone_crt" / component)
 
     def _disassemble_mlf(self, mlf_tar_path, source_dir):
-        with tempfile.TemporaryDirectory() as mlf_unpacking_dir:
+        with tempfile.TemporaryDirectory() as mlf_unpacking_dir_str:
+            mlf_unpacking_dir = pathlib.Path(mlf_unpacking_dir_str)
             with tarfile.open(mlf_tar_path, "r:") as tar:
                 tar.extractall(mlf_unpacking_dir)
 
-            # Copy C files
             model_dir = source_dir / "model"
             model_dir.mkdir()
-            for source, dest in [
-                ("codegen/host/src/default_lib0.c", "default_lib0.c"),
-                ("codegen/host/src/default_lib1.c", "default_lib1.c"),
-            ]:
-                shutil.copy(os.path.join(mlf_unpacking_dir, source), model_dir / dest)
+
+            # Copy C files from model. The filesnames and quantity
+            # depend on the target string, so we just copy all c files
+            source_dir = mlf_unpacking_dir / "codegen" / "host" / "src"
+            for file in source_dir.rglob(f"*.c"):
+                shutil.copy(file, model_dir)
 
             # Return metadata.json for use in templating
             with open(os.path.join(mlf_unpacking_dir, "metadata.json")) as f:
@@ -257,8 +269,9 @@ class Handler(server.ProjectAPIHandler):
         metadata = self._disassemble_mlf(model_library_format_path, source_dir)
         shutil.copy2(model_library_format_path, source_dir / "model")
 
-        # Template model.h with metadata to minimize space usage
-        self._template_model_header(source_dir, metadata)
+        # For AOT, template model.h with metadata to minimize space usage
+        if options["project_type"] == "example_project":
+            self._template_model_header(source_dir, metadata)
 
         self._change_cpp_file_extensions(source_dir)
 
