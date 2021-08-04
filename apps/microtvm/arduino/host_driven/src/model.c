@@ -1,12 +1,11 @@
 #ifndef TVM_IMPLEMENTATION_ARDUINO
 #define TVM_IMPLEMENTATION_ARDUINO
 
-#include "stdarg.h"
-
 #include "model.h"
 
 #include "Arduino.h"
 #include "standalone_crt/include/tvm/runtime/crt/internal/aot_executor/aot_executor.h"
+#include "stdarg.h"
 
 // Blink code for debugging purposes
 void TVMPlatformAbort(tvm_crt_error_t error) {

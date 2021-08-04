@@ -26,6 +26,7 @@ This unit test simulates an autotuning workflow, where we:
 
 PLATFORMS = conftest.PLATFORMS
 
+
 def _make_session(model, arduino_board, arduino_cli_cmd, mod):
     parent_dir = os.path.dirname(__file__)
     filename = os.path.splitext(os.path.basename(__file__))[0]
@@ -55,7 +56,12 @@ def _make_session(model, arduino_board, arduino_cli_cmd, mod):
         str(template_project_dir),
         mod,
         workspace.relpath("project"),
-        {"arduino_board": arduino_board, "arduino_cli_cmd": arduino_cli_cmd, "project_type": "host_driven", "verbose": 0},
+        {
+            "arduino_board": arduino_board,
+            "arduino_cli_cmd": arduino_cli_cmd,
+            "project_type": "host_driven",
+            "verbose": 0,
+        },
     )
     project.build()
     project.flash()
@@ -204,9 +210,7 @@ def test_onnx(platform, arduino_cli_cmd):
         assert np.argmax(result) == 9
 
 
-def check_result(
-    relay_mod, model, arduino_board, arduino_cli_cmd, map_inputs, out_shape, result
-):
+def check_result(relay_mod, model, arduino_board, arduino_cli_cmd, map_inputs, out_shape, result):
     """Helper function to verify results"""
     TOL = 1e-5
     target = tvm.target.target.micro(model)
