@@ -21,18 +21,14 @@ void loop() {
   size_t bytes_read = Serial.readBytes(data, to_read);
   uint8_t* arr_ptr = data;
   uint8_t** data_ptr = &arr_ptr;
-  digitalWrite(LED0, HIGH);
   if (bytes_read > 0) {
     size_t bytes_remaining = bytes_read;
     while (bytes_remaining > 0) {
       // Pass the received bytes to the RPC server.
       tvm_crt_error_t err = MicroTVMRpcServerLoop(server, data_ptr, &bytes_remaining);
-      digitalWrite(LED1, HIGH);
       if (err != kTvmErrorNoError && err != kTvmErrorFramingShortPacket) {
-        digitalWrite(LED2, HIGH);
         TVMPlatformAbort(err);
       }
     }
-    digitalWrite(LED2, LOW);
   }
 }
