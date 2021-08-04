@@ -14,15 +14,14 @@ tvm_workspace_t app_workspace;
 
 // Blink code for debugging purposes
 void TVMPlatformAbort(tvm_crt_error_t error) {
-  for (;;) {
-    for (int i = 0; i < error; i++) {
-      digitalWrite(LED_BUILTIN, HIGH);
-      delay(250);
-      digitalWrite(LED_BUILTIN, LOW);
-      delay(250);
-    }
-    delay(5000);
-  }
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(250);
+  digitalWrite(LED_BUILTIN, LOW);
+  delay(250);
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(250);
+  digitalWrite(LED_BUILTIN, LOW);
+  delay(750);
 }
 
 void TVMLogf(const char* msg, ...) {}
@@ -70,13 +69,10 @@ tvm_crt_error_t TVMPlatformGenerateRandom(uint8_t* buffer, size_t num_bytes) {
 void TVMInitialize() { StackMemoryManager_Init(&app_workspace, g_aot_memory, WORKSPACE_SIZE); }
 
 void TVMExecute(void* input_data, void* output_data) {
-  void* inputs[1] = {
-      input_data,
-  };
-  void* outputs[1] = {
-      output_data,
-  };
-  int ret_val = tvm_runtime_run(&tvmgen_default_network, inputs, outputs);
+  int ret_val = tvmgen_default_run_model(input_data, output_data);
+  if (ret_val != 0) {
+    TVMPlatformAbort(kTvmErrorPlatformCheckFailure);
+  }
 }
 
 #endif
