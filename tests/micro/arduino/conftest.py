@@ -6,7 +6,9 @@ import tvm.target.target
 # (model, zephyr_board).
 PLATFORMS = {
     "spresense": ("cxd5602gg", "spresense"),
-    "nano33ble": ("nRF52840", "nano33ble"),
+    "nano33ble": ("nrf52840", "nano33ble"),
+    "teensy40": ("imxrt1060", "teensy40"),
+    "teensy41": ("imxrt1060", "teensy41"),
 }
 
 
