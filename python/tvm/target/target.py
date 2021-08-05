@@ -282,8 +282,8 @@ def intel_graphics(model="unknown", options=None):
 MICRO_SUPPORTED_MODELS = {
     "host": [],
     "atsamd51": ["-mcpu=cortex-m4"],
-    "apollo3blue": ["-mcpu=cortex-m4"],
     "cxd5602gg": ["-mcpu=cortex-m4"],
+    "esp32": [],
     "imxrt1060": ["-mcpu=cortex-m7"],
     "mps2_an521": ["-mcpu=cortex-m33"],
     "nrf52840": ["-mcpu=cortex-m4"],
