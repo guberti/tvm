@@ -41,7 +41,19 @@ class BoardAutodetectFailed(Exception):
 
 
 BOARD_PROPERTIES = {
-    # Tested and verified to work
+    "due": {
+        "package": "arduino",
+        "architecture": "sam",
+        "board": "arduino_due_x"
+    },
+    # Due to the way the Feather S2 bootloader works, compilation
+    # behaves fine but uploads cannot be done automatically
+    "feathers2": {
+        "package": "esp32",
+        "architecture": "esp32",
+        "board": "feathers2",
+    },
+    # Spresense only works as of its v2.3.0 sdk
     "spresense": {
         "package": "SPRESENSE",
         "architecture": "spresense",
@@ -52,6 +64,14 @@ BOARD_PROPERTIES = {
         "architecture": "mbed_nano",
         "board": "nano33ble",
     },
+    "pybadge": {
+        "package": "adafruit",
+        "architecture": "samd",
+        "board": "adafruit_pybadge_m4",
+    },
+    # The Teensy boards are listed here for completeness, but they
+    # won't work until https://github.com/arduino/arduino-cli/issues/700
+    # is finished
     "teensy40": {
         "package": "teensy",
         "architecture": "avr",

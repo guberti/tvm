@@ -14,14 +14,18 @@ tvm_workspace_t app_workspace;
 
 // Blink code for debugging purposes
 void TVMPlatformAbort(tvm_crt_error_t error) {
-  digitalWrite(LED_BUILTIN, HIGH);
-  delay(250);
-  digitalWrite(LED_BUILTIN, LOW);
-  delay(250);
-  digitalWrite(LED_BUILTIN, HIGH);
-  delay(250);
-  digitalWrite(LED_BUILTIN, LOW);
-  delay(750);
+  for (;;) {
+    #ifdef LED_BUILTIN
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(250);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(250);
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(250);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(750);
+    #endif
+  }
 }
 
 void TVMLogf(const char* msg, ...) {}
