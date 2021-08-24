@@ -168,7 +168,10 @@ if include_libs:
 
 def get_package_data_files():
     # Relay standard libraries
-    return ["relay/std/prelude.rly", "relay/std/core.rly"]
+    return [
+        "relay/std/prelude.rly",
+        "relay/std/core.rly",
+    ]
 
 
 # Temporarily add this directory to the path so we can import the requirements generator
@@ -194,6 +197,7 @@ setup(
     packages=find_packages(),
     package_dir={"tvm": "tvm"},
     package_data={"tvm": get_package_data_files()},
+    data_files=[("micro_templates": ["../apps/microtvm/arduino", "../apps/microtvm/zephyr"])],
     distclass=BinaryDistribution,
     url="https://github.com/apache/tvm",
     ext_modules=config_cython(),
