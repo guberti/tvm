@@ -281,7 +281,6 @@ def docs(
         ]
     else:
         check_gpu()
-    config = "./tests/scripts/task_config_build_cpu.sh"
 
     scripts = extra_setup + [
         config + f" {build_dir}",
