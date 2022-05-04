@@ -36,7 +36,7 @@ deployed to Arduino using TVM.
 # .. image:: https://raw.githubusercontent.com/guberti/web-data/micro-train-tutorial-data/images/utilities/colab_button.png
 #      :align: center
 #      :target: https://colab.research.google.com/github/guberti/tvm-site/blob/asf-site/docs/_downloads/a7c7ea4b5017ae70db1f51dd8e6dcd82/micro_train.ipynb
-#      :width: 600px
+#      :width: 300px
 #
 # Motivation
 # ----------
@@ -258,16 +258,17 @@ validation_dataset = full_dataset.skip(len(train_dataset))
 #
 # Our applications generally don't need perfect accuracy - 90% is good enough. We can thus use the
 # older and smaller MobileNet V1 architecture. But this *still* won't be small enough - by default,
-# MobileNet V1 with 224x224 inputs and depth 1.0 takes ~50 MB to just **store**. To reduce the size
+# MobileNet V1 with 224x224 inputs and alpha 1.0 takes ~50 MB to just **store**. To reduce the size
 # of the model, there are three knobs we can turn. First, we can reduce the size of the input images
-# from 224x224 to 96x96 or 64x64, and Keras makes it easy to do this. We can also reduce the **depth**
-# of the model, from 1.0 to 0.25. And if we were really strapped for space, we could reduce the
+# from 224x224 to 96x96 or 64x64, and Keras makes it easy to do this. We can also reduce the **alpha**
+# of the model, from 1.0 to 0.25, which downscales the width of the network (and the number of
+# filters) by a factor of four. And if we were really strapped for space, we could reduce the
 # number of **channels** by making our model take grayscale images instead of RGB ones.
 #
-# In this tutorial, we will use an RGB 64x64 input image and 0.25 depth scale. This is not quite
+# In this tutorial, we will use an RGB 64x64 input image and alpha 0.25. This is not quite
 # ideal, but it allows the finished model to fit in 192 KB of RAM, while still letting us perform
-# transfer learning using the official Tensorflow source models (if we used depth scale <0.25 or
-# a grayscale input, we wouldn't be able to do this).
+# transfer learning using the official Tensorflow source models (if we used alpha <0.25 or a
+# grayscale input, we wouldn't be able to do this).
 #
 # What is Transfer Learning?
 # ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -431,7 +432,7 @@ with open(QUANTIZED_MODEL_PATH, "wb") as f:
 #
 # Generating our project
 # ^^^^^^^^^^^^^^^^^^^^^^
-# Next, we'll compile the model to TVM's MLF (machine learning format) intermediate representation,
+# Next, we'll compile the model to TVM's MLF (model library format) intermediate representation,
 # which consists of C/C++ code and is designed for autotuning. To improve performance, we'll tell
 # TVM that we're compiling for the ``nrf52840`` microprocessor (the one the Nano 33 BLE uses). We'll
 # also tell it to use the C runtime (abbreviated ``crt``) and to use ahead-of-time memory allocation
