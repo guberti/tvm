@@ -47,7 +47,7 @@ sudo usermod -a -G dialout $USER
 # 3rd party board URLs
 ADAFRUIT_BOARDS_URL="https://raw.githubusercontent.com/adafruit/arduino-board-index/7840c768/package_adafruit_index.json"
 ESP32_BOARDS_URL="https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_dev_index.json"
-SPRESENSE_BOARDS_URL="https://github.com/sonydevworld/spresense-arduino-compatible/releases/download/v2.5.0/package_spresense_index.json"
+SPRESENSE_BOARDS_URL="https://github.com/sonydevworld/spresense-arduino-compatible/releases/download/v2.5.1/package_spresense_index.json"
 arduino-cli core update-index --additional-urls $ADAFRUIT_BOARDS_URL,$ESP32_BOARDS_URL,$SPRESENSE_BOARDS_URL
 
 # Install supported cores from those URLS
@@ -56,7 +56,7 @@ arduino-cli core install arduino:mbed_nano@3.0.1
 arduino-cli core install arduino:sam@1.6.12
 arduino-cli core install adafruit:samd@1.7.10 --additional-urls $ADAFRUIT_BOARDS_URL
 arduino-cli core install esp32:esp32@2.0.2 --additional-urls $ESP32_BOARDS_URL
-arduino-cli core install SPRESENSE:spresense@2.5.0 --additional-urls $SPRESENSE_BOARDS_URL
+arduino-cli core install SPRESENSE:spresense@2.5.1 --additional-urls $SPRESENSE_BOARDS_URL
 
 # Cleanup
 rm -f *.sh
