@@ -65,6 +65,7 @@ def test_kws_autotune_workflow(platform, board, tmp_path):
         params,
         build_dir=tmp_path,
         tune_logs=str_io_logs,
+        project_options={"config_main_stack_size": 8192},
     ) as session:
         aot_executor = tvm.runtime.executor.aot_executor.AotModule(session.create_aot_executor())
 
