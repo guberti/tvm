@@ -27,6 +27,23 @@ import tvm.micro.testing
 from tvm.testing.utils import fetch_model_from_url
 
 TUNING_RUNS_PER_OPERATOR = 2
+ZEPHYR_STACK_SIZES = {  # Sizes in bytes
+    "nrf5340dk_nrf5340_cpuapp": 10000,
+    "nucleo_f746zg": 4000,
+    "nucleo_l4r5zi": 4000,
+    "qemu_x86": 4000,
+    "stm32f746g_disco": 3000,
+    "mps3_an547": 1536,
+}
+
+
+def apply_project_options(platform, board):
+    # Currently, Zephyr stack size must be set manually. Setting it too large will fail.
+    if platform == "zephyr":
+        return {"config_main_stack_size": ZEPHYR_STACK_SIZES[board]}
+
+    # Arduino and other platforms do not need specific options
+    return None
 
 
 @pytest.mark.requires_hardware
@@ -65,7 +82,7 @@ def test_kws_autotune_workflow(platform, board, tmp_path):
         params,
         build_dir=tmp_path,
         tune_logs=str_io_logs,
-        project_options={"config_main_stack_size": 8192},
+        project_options=apply_project_options(platform, board),
     ) as session:
         aot_executor = tvm.runtime.executor.aot_executor.AotModule(session.create_aot_executor())
 
