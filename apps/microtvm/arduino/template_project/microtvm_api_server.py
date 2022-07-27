@@ -404,7 +404,7 @@ class Handler(server.ProjectAPIHandler):
             compile_cmd.append("--verbose")
 
         # Specify project to compile
-        subprocess.run(compile_cmd, check=True)
+        subprocess.run(compile_cmd, cwd=API_SERVER_DIR, check=True)
 
     POSSIBLE_BOARD_LIST_HEADERS = ("Port", "Protocol", "Type", "Board Name", "FQBN", "Core")
 
@@ -487,7 +487,7 @@ class Handler(server.ProjectAPIHandler):
 
         for _ in range(self.FLASH_MAX_RETRIES):
             try:
-                subprocess.run(upload_cmd, check=True, timeout=self.FLASH_TIMEOUT_SEC)
+                subprocess.run(upload_cmd, cwd=API_SERVER_DIR, check=True, timeout=self.FLASH_TIMEOUT_SEC)
                 break
 
             # We only catch timeout errors - a subprocess.CalledProcessError
