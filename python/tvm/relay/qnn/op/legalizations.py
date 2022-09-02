@@ -418,7 +418,11 @@ def is_aarch64_arm():
 
 
 def is_cortexm_arm():
-    """Checks whether we are compiling for a Cortex-M target."""
+    """Checks whether we are compiling for a Cortex-M target. We want to preserve
+    int8 operations for these boards, because it halves the number of memory loads
+    needed for dense layers and convolutions. It comes at a cost of needing more
+    micro kernels and sign extension instructions to load these values, but this
+    trade-off seems to be worth it on Cortex-M."""
     target = tvm.target.Target.current(allow_none=False)
     return "cortex-m" in target.attrs.get("mcpu", "")
 
