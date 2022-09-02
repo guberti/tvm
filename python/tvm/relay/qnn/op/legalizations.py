@@ -417,16 +417,6 @@ def is_aarch64_arm():
     return "aarch64" in target.attrs.get("mtriple", "")
 
 
-def is_cortexm_arm():
-    """Checks whether we are compiling for a Cortex-M target. We want to preserve
-    int8 operations for these boards, because it halves the number of memory loads
-    needed for dense layers and convolutions. It comes at a cost of needing more
-    micro kernels and sign extension instructions to load these values, but this
-    trade-off seems to be worth it on Cortex-M."""
-    target = tvm.target.Target.current(allow_none=False)
-    return "cortex-m" in target.attrs.get("mcpu", "")
-
-
 ########################
 # ARM CPU legalizations.
 ########################
@@ -434,7 +424,8 @@ def is_cortexm_arm():
 
 @qnn_conv2d_legalize.register("arm_cpu")
 def _qnn_conv2d_legalize_arm_cpu(attrs, inputs, types):
-    # ARM prefers the dtypes to be same.
+    target = tvm.target.Target.current(allow_none=False)
+    has_asimd = is_aarch64_arm() or "+neon" in target.mattr
     is_depthwise = relay.op.strategy.is_depthwise_conv2d(
         types[0].shape,
         attrs["data_layout"],
@@ -442,18 +433,25 @@ def _qnn_conv2d_legalize_arm_cpu(attrs, inputs, types):
         attrs["kernel_layout"],
         attrs["groups"],
     )
-    use_int8_on_arm = (not is_depthwise) and is_aarch64_arm() and attrs["data_layout"] == "NHWC"
-    if use_int8_on_arm or is_fast_int8_on_arm() or is_cortexm_arm():
-        return helper_change_dtypes_to_be_same(attrs, inputs, types, relay.qnn.op.conv2d)
-    return helper_no_fast_int8_hw_legalization(attrs, inputs, types, relay.nn.conv2d)
+    if (
+        (not is_depthwise)
+        and has_asimd
+        and attrs["data_layout"] == "NHWC"
+        and (not is_fast_int8_on_arm())
+    ):
+        return helper_no_fast_int8_hw_legalization(attrs, inputs, types, relay.nn.conv2d)
+    # ARM prefers the dtypes to be same.
+    return helper_change_dtypes_to_be_same(attrs, inputs, types, relay.qnn.op.conv2d)
 
 
 @qnn_dense_legalize.register("arm_cpu")
 def _qnn_dense_legalize_arm_cpu(attrs, inputs, types):
+    target = tvm.target.Target.current(allow_none=False)
+    has_asimd = is_aarch64_arm() or "+neon" in target.mattr
+    if has_asimd and not is_fast_int8_on_arm():
+        return helper_no_fast_int8_hw_legalization(attrs, inputs, types, relay.nn.dense)
     # ARM prefers the dtypes to be same.
-    if is_fast_int8_on_arm() or is_cortexm_arm():
-        return helper_change_dtypes_to_be_same(attrs, inputs, types, relay.qnn.op.dense)
-    return helper_no_fast_int8_hw_legalization(attrs, inputs, types, relay.nn.dense)
+    return helper_change_dtypes_to_be_same(attrs, inputs, types, relay.qnn.op.dense)
 
 
 ##########################
