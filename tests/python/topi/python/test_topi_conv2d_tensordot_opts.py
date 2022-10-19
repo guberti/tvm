@@ -14,81 +14,40 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Test code for tvm.topi.arm_cpu.mprofile.dsp.micro_kernel.tensordot.static_kernel_reshape"""
+"""Test code for tvm.topi.arm_cpu.mprofile.dsp.micro_kernel.tensordot.optimized_tensordot_impl"""
 
-import numpy as np
-import pytest
+import textwrap
 
-from tvm.topi.arm_cpu.mprofile.dsp.micro_kernel.tensordot import static_kernel_reshape
+from tvm.topi.arm_cpu.mprofile.dsp.micro_kernel.tensordot import optimized_int16_tensordot_impl
 
+def test_write_3x3_depthwise_code():
+    code = optimized_int16_tensordot_impl(48, (3, 3), 1, 1, 1, True, False)
+    assert code == textwrap.dedent("""
+    __STATIC_FORCEINLINE int fastboi(int *out, int *tensor, int *kernel) {
+      int sum_0;
 
-def test_requires_pow_2():
-    """simd_lanes must be a power of 2"""
-    with pytest.raises(Exception):
-        static_kernel_reshape(np.array([2]), 48, (1, 1), 5)
+      int tensor__y00_x00__y00_x01 = tensor[0];
+      int tensor__y00_x02__unknown = tensor[1];
+      int tensor__y01_x00__y01_x01 = tensor[24];
+      int tensor__y01_x02__unknown = tensor[25];
+      int tensor__y02_x00__y02_x01 = tensor[48];
+      int tensor__y02_x02__unknown = tensor[49];
 
+      int kernel__y00_x00__y00_x01 = kernel[0];
+      int kernel__y00_x02__y01_x00 = kernel[1];
+      int kernel__y01_x01__y01_x02 = kernel[2];
+      int kernel__y02_x00__y02_x01 = kernel[3];
+      int kernel__y02_x02__unknown = kernel[4];
 
-class Test3x3DepthwiseKernelTwoLanes:
-    no_pad_no_copy = np.array([[1, 2, 3, 4, 5, 6, 7, 8, 9]])
-    yes_pad_no_copy = np.array([[1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0]])
-    no_pad_yes_copy = np.array([
-        [1, 2] + [3, 4] + [5, 6] + [7, 8] + [9],
-           [1] + [2, 3] + [4, 5] + [6, 7] + [8, 9]
-    ])
-    yes_pad_yes_copy = np.array([
-            [1, 2] + [3, 0] + [4, 5] + [6, 0] + [7, 8] + [9, 0] + [0],
-               [1] + [2, 3] + [0, 4] + [5, 6] + [0, 7] + [8, 9] + [0, 0]
-    ])
+      sum_0 = __builtin_arm_smuad(tensor__y00_x00__y00_x01, kernel__y00_x00__y00_x01);
+      sum_0 = __builtin_arm_smlabb(tensor__y00_x02__unknown, kernel__y00_x02__y01_x00, sum_0);
+      sum_0 = __builtin_arm_smlabt(tensor__y01_x00__y01_x01, kernel__y00_x02__y01_x00, sum_0);
+      sum_0 = __builtin_arm_smlatb(tensor__y01_x00__y01_x01, kernel__y01_x01__y01_x02, sum_0);
+      sum_0 = __builtin_arm_smlabt(tensor__y01_x02__unknown, kernel__y01_x01__y01_x02, sum_0);
+      sum_0 = __builtin_arm_smlad(tensor__y02_x00__y02_x01, kernel__y02_x00__y02_x01, sum_0);
+      sum_0 = __builtin_arm_smlabb(tensor__y02_x02__unknown, kernel__y02_x02__unknown, sum_0);
 
-    @pytest.mark.parametrize("tensor_w, strides, expected", [
-        (48, (1, 1), yes_pad_yes_copy),
-        (48, (1, 2), yes_pad_no_copy),
-        (48, (2, 1), yes_pad_yes_copy),
-        (48, (2, 2), yes_pad_no_copy),
-        (49, (1, 1), no_pad_yes_copy),
-        (49, (1, 2), no_pad_yes_copy),
-        (49, (2, 1), no_pad_yes_copy),
-        (49, (2, 2), no_pad_no_copy),
-    ])
-    def test_kernel_reshape(self, tensor_w, strides, expected):
-        print("Running a kernel reshape test!")
-        print(f"tensor_w: {tensor_w}")
-        print(f"strides: {strides}")
-        kernel = np.array([
-            [1, 2, 3],
-            [4, 5, 6],
-            [7, 8, 9]
-        ])
-        result = static_kernel_reshape(kernel, tensor_w, strides, 2)
-        assert np.array_equal(result, expected)
-
-
-class Test1x1KernelTwoLanes:
-    """Since it is better to use int16 operations on the Arm M4/M7 cores, these are the only tests
-    we care about for those cores. All other tests only matter for cores with MVE."""
-
-    no_copy = np.array([[1, 2, 3, 4, 5, 6, 7, 8]])
-    yes_copy = np.array([
-        [1, 2] + [3, 4] + [5, 6] + [7, 8] + [0],
-           [1] + [2, 3] + [4, 5] + [6, 7] + [8, 0],
-    ])
-
-    @pytest.mark.parametrize("tensor_w, strides, expected", [
-        (48, (1, 1), yes_copy),
-        (48, (1, 2), no_copy),
-        (48, (2, 1), yes_copy),
-        (48, (2, 2), no_copy),
-        (49, (1, 1), yes_copy),
-        (49, (1, 2), yes_copy),
-        (49, (2, 1), yes_copy),
-        (49, (2, 2), no_copy),
-    ])
-    def test_kernel_reshape(self, tensor_w, strides, expected):
-        print("Running a kernel reshape test!")
-        print(f"tensor_w: {tensor_w}")
-        print(f"strides: {strides}")
-        kernel = np.array([
-            [1, 2, 3, 4, 5, 6, 7, 8],
-        ])
-        result = static_kernel_reshape(kernel, tensor_w, strides, 2)
-        assert np.array_equal(result, expected)
+      output[0] = sum_0;
+      return 0;
+    }
+    """)
