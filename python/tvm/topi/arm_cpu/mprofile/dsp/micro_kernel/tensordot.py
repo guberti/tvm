@@ -19,6 +19,7 @@ including regular conv2d, depthwise conv2d, and grouped conv2d provided the data
 are the optimal ones. When groups=1, the optimal data layout is NHWC and kernel layout is OHWI. When
 this is a depthwise convolution, the optimal data layout is NCHW and kernel layout is OIHW."""
 
+from itertools import chain
 import textwrap
 
 import numpy as np
@@ -30,7 +31,7 @@ from .common import num_simd_lanes_per_word
 
 def _is_pow_2(number):
     """Checks if `number` is a power of `2`."""
-    return number & (number-1) == 0 and number > 0
+    return number & (number - 1) == 0 and number > 0
 
 
 def _count_factorization_2s(number):
@@ -41,7 +42,6 @@ def _count_factorization_2s(number):
         number // 2
         count += 1
     return count
-
 
 
 def _get_func_name(in_dtype, tensor_h, jump, tensor_w, suffix):
@@ -105,7 +105,7 @@ def static_kernel_reshape(kernel, tensor_w, strides, simd_lanes):
 
     # Copy our flattened kernel at each location
     for i in range(num_kernel_copies):
-        flat_output[i * len_kernel_copies:(i+1) * len_kernel_copies] = flat_kernel
+        flat_output[i * len_kernel_copies : (i + 1) * len_kernel_copies] = flat_kernel
 
     return flat_output.reshape(num_kernel_copies, len_kernel_copies)
 
@@ -153,7 +153,7 @@ def make_intrin_tensordot(slices, strides, tensordot_params):
     )
 
 
-def simple_tensordot_impl(in_dtype: str, tensor_h: int, jump: int, tensor_w: int) -> str:
+def tensordot_impl(in_dtype: str, tensor_h: int, jump: int, tensor_w: int) -> str:
     simd_lanes = num_simd_lanes_per_word(in_dtype)
     assert tensor_w % simd_lanes == 0
     assert jump % simd_lanes == 0
@@ -214,11 +214,13 @@ def simple_tensordot_impl(in_dtype: str, tensor_h: int, jump: int, tensor_w: int
 
 
 def _init_accumulators(split_size):
-    var_names = map(lambda x: f"sum_{x:x}", range(num_accumulators))
-    return f"int {var_names.join(", ")};"
+    var_names = map(lambda x: f"sum_{x:x}", range(split_size))
+    joined_var_names = ", ".join(var_names)
+    return f"int {joined_var_names};"
 
 
-def _get_tensor_halfwords(tensor_w, kernel_h, kernel_w, split_max):
+def _get_tensor_halfwords(tensor_w, kernel_dims, split_max):
+    kernel_h, kernel_w = kernel_dims
     for y in range(kernel_h):
         if y * tensor_w % 2 == 1:
             yield None
@@ -228,11 +230,12 @@ def _get_tensor_halfwords(tensor_w, kernel_h, kernel_w, split_max):
             yield None
 
 
-def _get_kernel_halfwords(kernel_h, kernel_w):
-    for y in kernel_h:
-        for x in kernel_w:
+def _get_kernel_halfwords(kernel_dims, _has_offset_kernel):
+    kernel_h, kernel_w = kernel_dims
+    for y in range(kernel_h):
+        for x in range(kernel_w):
             yield (y, x)
-    if len(halfword_vars) % 2:
+    if kernel_h * kernel_w % 2 == 1:
         yield None
 
 
@@ -245,26 +248,27 @@ def _get_int16_alias(position):
 
 def _load_tensor_vars(halfwords, tensor_w):
     for i in range(0, len(halfwords), 2):
-        var_name = map(_get_int16_alias, halfwords[i:i+2]).join("__")
-        y, x = halfwords[i] or halfwords[i+1]
+        var_name = "__".join(map(_get_int16_alias, halfwords[i : i + 2]))
+        y, x = halfwords[i] or halfwords[i + 1]
         tensor_index = (y * tensor_w + x) // 2
-        return f"int tensor__{var_name} = tensor[{tensor_index}];"
+        yield f"int tensor__{var_name} = tensor[{tensor_index}];"
 
 
 def _load_kernel_vars(halfwords):
     for i in range(0, len(halfwords), 2):
-        var_name = map(_get_int16_alias, halfwords[i:i+2]).join("__")
-        return f"int kernel__{var_name} = kernel[{i // 2}];"
+        var_name = "__".join(map(_get_int16_alias, halfwords[i : i + 2]))
+        yield f"int kernel__{var_name} = kernel[{i // 2}];"
 
 
-def _get_draft_macs(kernel_h, kernel_w, tensor_halfwords, kernel_halfwords, offset):
-    def get_var_location(y, x, halfwords):
-        index = halfwords.index((y, x))
-        if index % 2 == 0:
-            return f"{_get_int16_alias(y, x)}__{_get_int16_alias(var_names[i + 1])}", "b"
+def _get_draft_macs(kernel_dims, tensor_halfwords, kernel_halfwords, offset):
+    def get_var(y, x, halfwords):
+        i = halfwords.index((y, x))
+        if i % 2 == 0:
+            return f"{_get_int16_alias((y, x))}__{_get_int16_alias(halfwords[i + 1])}", "b"
         else:
-            return f"{_get_int16_alias(var_names[i - 1])__{_get_int16_alias(y, x)}}", "t"
+            return f"{_get_int16_alias(halfwords[i - 1])}__{_get_int16_alias((y, x))}", "t"
 
+    kernel_h, kernel_w = kernel_dims
     for y in range(kernel_h):
         for x in range(kernel_w):
             tensor_var, tensor_half = get_var(y, x + offset, tensor_halfwords)
@@ -273,24 +277,26 @@ def _get_draft_macs(kernel_h, kernel_w, tensor_halfwords, kernel_halfwords, offs
 
 
 def _apply_simd_optimizations(instruction_tuples):
-    i = 0
-    while i < len(instruction_tuples):
-        if i == len(instruction_tuples) - 1:
-            yield instruction_tuples[i]
+    curr_tuple = next(instruction_tuples, None)
+    while curr_tuple:
+        next_tuple = next(instruction_tuples, None)
+        if not next_tuple:
+            yield curr_tuple
             break
 
-        curr_ins, *curr_ops = instruction_tuples[i]
-        next_ins, *next_ops = instruction_tuples[i + 1]
-        if curr_ops == next_ops:
-            if set([curr_ins, next_ins]) == set(["smlatt", "smlabb"]):
-                yield "smlad", *curr_ops
-                i += 2
-            elif set([curr_ins, next_ins]) == set(["smlatb", "smlabt"]):
-                yield "smladx", *curr_ops
-                i += 2
+        if curr_tuple[1:] == next_tuple[1:]:
+            if set([curr_tuple[0], next_tuple[0]]) == set(["smlatt", "smlabb"]):
+                yield "smlad", *curr_tuple[1:]
+                next_tuple = next(instruction_tuples, None)
+            elif set([curr_tuple[0], next_tuple[0]]) == set(["smlatb", "smlabt"]):
+                yield "smladx", *curr_tuple[1:]
+                next_tuple = next(instruction_tuples, None)
             else:
-                yield curr_ins, *curr_ops
-                i += 1
+                yield curr_tuple
+
+        else:
+            yield curr_tuple
+        curr_tuple = next_tuple
 
 
 NO_ACC_PREFIX_CONVERSIONS = {
@@ -299,18 +305,17 @@ NO_ACC_PREFIX_CONVERSIONS = {
     "smlatt": "smultt",
     "smlatb": "smultb",
     "smlabt": "smulbt",
-    "smlann": "smulbb",
+    "smlabb": "smulbb",
 }
 
-def _expand_instruction_tuple_lists(tuple_lists, index):
-    for j, instruction_tuple in enumerate(instruction_tuples):
-        instruction, op1, op2 = instruction_tuple
 
-        if j == 0:
-            no_acc_instruction = NO_ACC_PREFIX_CONVERSIONS[instruction]
-            yield f"sum_{index} = __builtin_arm_{no_acc_instruction}({op1}, {op2});"
-        else:
-            yield f"sum_{index} = __builtin_arm_{instruction}({op1}, {op2}, sum_{index});"
+def _expand_instruction_tuples(tuples, index):
+    prefix = f"sum_{index} = __builtin_arm"
+    instruction_name, op1, op2 = next(tuples)
+    no_accumulate = NO_ACC_PREFIX_CONVERSIONS[instruction_name]
+    yield f"{prefix}_{no_accumulate}(tensor__{op1}, kernel__{op2});"
+    for instruction_name, op1, op2 in tuples:
+        yield f"{prefix}_{instruction_name}(tensor__{op1}, kernel__{op2}, sum_{index});"
 
 
 def _write_sums_to_memory(num_sums, out_stride):
@@ -318,45 +323,46 @@ def _write_sums_to_memory(num_sums, out_stride):
         yield f"output[{i * out_stride}] = sum_{i};"
 
 
-def optimized_tensordot_impl(in_dtype, tensor_w, kernel_dims, split_size, in_stride, out_stride, has_dsp, has_offset_kernel) -> str:
+def optimized_int16_tensordot_impl(
+    tensor_w, kernel_dims, split_size, in_stride, out_stride, has_dsp, has_offset_kernel
+) -> str:
     """Code for a specialized version of tensordot, which computes `split_size` tensordot operations
     at the same time. Only works with `int16`. The generated function takes as input pointers to the
     output, tensor, and kernel, which must be word-aligned. However, the stride can be half a word.
     """
-    assert in_dtype == "int16"
-    kernel_h, kernel_w = kernel_dims
-
-    tensor_halfwords = _get_tensor_halfwords(tensor_w, kernel_h, kernel_w, split_size * stride - 1)
-    kernel_halfwords = _get_kernel_halfwords(kernel_h, kernel_w, has_offset_kernel)
+    tensor_halfwords = list(
+        _get_tensor_halfwords(tensor_w, kernel_dims, (split_size - 1) * in_stride)
+    )
+    kernel_halfwords = list(_get_kernel_halfwords(kernel_dims, has_offset_kernel))
     load_tensor_lines = _load_tensor_vars(tensor_halfwords, tensor_w)
     load_kernel_lines = _load_kernel_vars(kernel_halfwords)
 
-    optimized_macs = []
-    for offset in range(0, split_size * stride, stride):
-        draft_macs_iter = _get_draft_macs(kernel_h, kernel_w, tensor_halfwords, kernel_halfwords, offset)
+    def gen_single_loop_macs(index):
+        draft_macs_iter = _get_draft_macs(
+            kernel_dims, tensor_halfwords, kernel_halfwords, index * in_stride
+        )
         if has_dsp:
-            draft_macs_iter = _apply_simd_optimizations(list(draft_macs_iter))
+            draft_macs_iter = _apply_simd_optimizations(draft_macs_iter)
             if has_offset_kernel:
                 pass
+        return _expand_instruction_tuples(draft_macs_iter, index)
 
-        optimized_macs.extend(_expand_instruction_tuple_lists(draft_macs_iter, offset // stride))
-
+    multiply_acc_lines = chain.from_iterable(gen_single_loop_macs(i) for i in range(split_size))
     write_out_lines = _write_sums_to_memory(split_size, out_stride)
 
-
     def insert_lines(lines):
-        return lines.join(" " * 10 + "\n")
+        return ("\n" + " " * 10).join(lines)
 
     return textwrap.dedent(
         f"""
-        __STATIC_FORCEINLINE int {function_name}(int *out, int *tensor, int *kernel) {{
+        __STATIC_FORCEINLINE int fastboi(int *out, int *tensor, int *kernel) {{
           {_init_accumulators(split_size)}
 
           {insert_lines(load_tensor_lines)}
 
           {insert_lines(load_kernel_lines)}
 
-          {insert_lines(optimized_macs)}
+          {insert_lines(multiply_acc_lines)}
 
           {insert_lines(write_out_lines)}
           return 0;
