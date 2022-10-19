@@ -70,46 +70,20 @@ def static_kernel_reshape(kernel, tensor_w, strides, simd_lanes):
          this fast! Starting two bytes to the right doesn't help either, as then `0x0031 | 0x0032`
          spans a word boundry.
 
-         The problem is even worse than it sounds. Suppose `tensor_w = 49` instead. We cannot easily
-         pad the input tensor without taking up time (due to MetaScheduler's padding optimizations),
-         so every other row is *guaranteed* to not be word aligned. And with the `int8` dtype, three
-         in four rows will not start word aligned!
-
-         Luckily, we have a clever solution - *pad the kernel so it is misaligned in the same way*.
-         In our first example (with `in_dtype == "int16"` and `tensor_w = 48`), we add two bytes of
-         zeros to the end of each row in the kernel. If instead `tensor_w = 49`, we don't need
-         padding at all with the `int16` dtype, though we must pad with two bytes for `int8`.
-
-         Note that doing this padding *always* makes us faster, even though we do more total memory
-         loads in some cases and the unaligned access penalty is only one cycle.
+         The problem is even worse than it sounds. Suppose `tensor_w = 49` instead. And with the
+         `int8` dtype, three in four rows will not start word aligned!
 
 
-      2. The second problem is more straightfoward - consider when the horizontal stride (in bytes)
-         is *not* a multiple of the number of SIMD lanes. This is guaranteed to shift the word
-         alignment for every horizontal stride (and sometimes on vertical strides too), leading to
-         unaligned word divides between the input tensor and kernel. Note that in practice, this
-         issue rarely happens for regular Conv2Ds, and happens *all the time* for depthwise Conv2Ds.
-
-         The solution is to create copies of the kernel in memory for every SIMD lane offset. This
-         does take up more flash memory, but kernels are small enough this is probably fine. We must
-         also take our padding from issue #1 into account here.
-
-         This change *does not* always make us faster, because switching between kernel copies with
-         different offsets takes 1-2 cycles (1 normally, 2 when it prevents pipelining). A depthwise
-         convolution with `in_dtype == "int8"` and a `1x1` kernel would incur more overhead via this
-         mechanism then we'd save by preventing unaligned access. However, this is an edge case no
-         one would ever use in practice (IRL they'd use a broadcast multiply), as are the other
-         cases where this change hurts performance. Hence, we will do it whenever the strides aren't
-         a mulitple of SIMD lanes.
+      2. Next, consider when the horizontal stride (in bytes) is *not* a multiple of the number of
+         SIMD lanes. This is guaranteed to shift the word alignment for every horizontal stride (and
+         sometimes on vertical strides too), leading to unaligned word divides between the input
+         tensor and kernel. Note that in practice, this issue rarely happens for regular Conv2Ds,
+         and happens *all the time* for depthwise Conv2Ds.
 
 
-    We could fix this by padding the input tensor, but doing this without using more time (or
-    messing up MetaScheduler's padding optimizations) is hard. Luckily, we can fix both by only
-    modifying the kernel.
-
-    This function performs these fixes, and works in full generality (to make supporting Arm MVE
-    easier). Note that we don't care about the word width and in_dtype - we only care about the
-    quotient of their lengths (word_width / in_dtype = simd_lanes)."""
+    All solutions to these issues require more flash memory. There are other approaches, but for the
+    sake of generality we choose to duplicate the kernel once for each SIMD lane offset. This change
+    can be enabled or disabled via autotuning."""
 
     assert _is_pow_2(simd_lanes)
     kernel_h, kernel_w = kernel.shape
