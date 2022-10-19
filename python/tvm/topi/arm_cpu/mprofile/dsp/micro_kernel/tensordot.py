@@ -21,6 +21,7 @@ this is a depthwise convolution, the optimal data layout is NCHW and kernel layo
 
 from itertools import chain
 import textwrap
+from typing import Iterator, Tuple
 
 import numpy as np
 
@@ -44,9 +45,20 @@ def _count_factorization_2s(number):
     return count
 
 
-def _get_func_name(in_dtype, tensor_h, jump, tensor_w, suffix):
+def _get_func_name(in_dtype, tensor_h, jump, tensor_w):
     """Gets the C function name of the tensordot function."""
-    return f"tensordot_{in_dtype}_h{tensor_h}_j{jump}_w{tensor_w}_{suffix}"
+    return f"tensordot_{in_dtype}_h{tensor_h}_j{jump}_w{tensor_w}"
+
+
+def _get_int16_opt_func_name(tensor_w, kernel_dims, split_size, x_strides, options):
+    """Gets the C function name of the tensordot function."""
+    return (
+        f"tensordot_opt_x{split_size}_int16_w{tensor_w}_"
+        + f"{kernel_dims[0]}x{kernel_dims[1]}"
+        + (f"_{x_strides[0]}_{x_strides[1]}" if split_size > 1 else "")
+        + ("_dsp" if options[0] else "")
+        + ("_2xkernel" if options[1] else "")
+    )
 
 
 def static_kernel_reshape(kernel, tensor_w, strides, simd_lanes):
@@ -115,7 +127,7 @@ def make_intrin_tensordot(slices, strides, tensordot_params):
     (as multiple schedules use tensordot and each must build the intrinstic differently) but we can
     build part here to simplify the code."""
 
-    # in_dtype, tensor_h, jump, tensor_w, suffix = tensordot_params
+    # in_dtype, tensor_h, jump, tensor_w = tensordot_params
     data, kernel, output = slices
     data_strides, kernel_strides = strides
 
@@ -180,13 +192,12 @@ def tensordot_impl(in_dtype: str, tensor_h: int, jump: int, tensor_w: int) -> st
     else:
         raise ValueError(f"No tensordot implementation exists for dtype '{in_dtype}'!")
 
-    function_name = _get_func_name(in_dtype, tensor_h, jump, tensor_w, suffix)
+    function_name = _get_func_name(in_dtype, tensor_h, jump, tensor_w)
     return textwrap.dedent(
         (
             f"""
-        #ifndef {function_name.upper()}
-        #define {function_name.upper()}
-        __STATIC_FORCEINLINE int {function_name}(
+        #include <arm_nnsupportfunctions.h>
+        __STATIC_FORCEINLINE __WEAK int {function_name}(
             int *out,
             int *tensor,
             int *kernel) {{
@@ -219,8 +230,9 @@ def _init_accumulators(split_size):
     return f"int {joined_var_names};"
 
 
-def _get_tensor_halfwords(tensor_w, kernel_dims, split_max):
+def _get_tensor_halfwords(tensor_w, kernel_dims, split_size, in_stride) -> Iterator:
     kernel_h, kernel_w = kernel_dims
+    split_max = (split_size - 1) * in_stride
     for y in range(kernel_h):
         if y * tensor_w % 2 == 1:
             yield None
@@ -230,7 +242,7 @@ def _get_tensor_halfwords(tensor_w, kernel_dims, split_max):
             yield None
 
 
-def _get_kernel_halfwords(kernel_dims, _has_offset_kernel):
+def _get_kernel_halfwords(kernel_dims, _has_multi_kernel) -> Iterator:
     kernel_h, kernel_w = kernel_dims
     for y in range(kernel_h):
         for x in range(kernel_w):
@@ -239,14 +251,14 @@ def _get_kernel_halfwords(kernel_dims, _has_offset_kernel):
         yield None
 
 
-def _get_int16_alias(position):
+def _get_int16_alias(position) -> str:
     if not position:
         return "unknown"
     y, x = position
     return f"y{y:0>2x}_x{x:0>2x}"
 
 
-def _load_tensor_vars(halfwords, tensor_w):
+def _load_tensor_vars(halfwords, tensor_w) -> Iterator[str]:
     for i in range(0, len(halfwords), 2):
         var_name = "__".join(map(_get_int16_alias, halfwords[i : i + 2]))
         y, x = halfwords[i] or halfwords[i + 1]
@@ -254,13 +266,13 @@ def _load_tensor_vars(halfwords, tensor_w):
         yield f"int tensor__{var_name} = tensor[{tensor_index}];"
 
 
-def _load_kernel_vars(halfwords):
+def _load_kernel_vars(halfwords) -> Iterator[str]:
     for i in range(0, len(halfwords), 2):
         var_name = "__".join(map(_get_int16_alias, halfwords[i : i + 2]))
         yield f"int kernel__{var_name} = kernel[{i // 2}];"
 
 
-def _get_draft_macs(kernel_dims, tensor_halfwords, kernel_halfwords, offset):
+def _get_draft_macs(kernel_dims, tensor_halfwords, kernel_halfwords, offset) -> Iterator[str]:
     def get_var(y, x, halfwords):
         i = halfwords.index((y, x))
         if i % 2 == 0:
@@ -276,7 +288,7 @@ def _get_draft_macs(kernel_dims, tensor_halfwords, kernel_halfwords, offset):
             yield f"smla{tensor_half}{kernel_half}", tensor_var, kernel_var
 
 
-def _apply_simd_optimizations(instruction_tuples):
+def _apply_simd_optimizations(instruction_tuples) -> Iterator[str]:
     curr_tuple = next(instruction_tuples, None)
     while curr_tuple:
         next_tuple = next(instruction_tuples, None)
@@ -309,7 +321,7 @@ NO_ACC_PREFIX_CONVERSIONS = {
 }
 
 
-def _expand_instruction_tuples(tuples, index):
+def _expand_instruction_tuples(tuples, index) -> Iterator[str]:
     prefix = f"sum_{index} = __builtin_arm"
     instruction_name, op1, op2 = next(tuples)
     no_accumulate = NO_ACC_PREFIX_CONVERSIONS[instruction_name]
@@ -318,22 +330,28 @@ def _expand_instruction_tuples(tuples, index):
         yield f"{prefix}_{instruction_name}(tensor__{op1}, kernel__{op2}, sum_{index});"
 
 
-def _write_sums_to_memory(num_sums, out_stride):
+def _write_sums_to_memory(num_sums, out_stride) -> Iterator[str]:
     for i in range(num_sums):
         yield f"output[{i * out_stride}] = sum_{i};"
 
 
 def optimized_int16_tensordot_impl(
-    tensor_w, kernel_dims, split_size, in_stride, out_stride, has_dsp, has_offset_kernel
+    tensor_w: int,
+    kernel_dims: Tuple[int, int],
+    split_size: int,
+    x_strides: Tuple[int, int],
+    options: Tuple[bool, bool],
 ) -> str:
     """Code for a specialized version of tensordot, which computes `split_size` tensordot operations
     at the same time. Only works with `int16`. The generated function takes as input pointers to the
     output, tensor, and kernel, which must be word-aligned. However, the stride can be half a word.
     """
-    tensor_halfwords = list(
-        _get_tensor_halfwords(tensor_w, kernel_dims, (split_size - 1) * in_stride)
-    )
-    kernel_halfwords = list(_get_kernel_halfwords(kernel_dims, has_offset_kernel))
+    function_name = _get_int16_opt_func_name(tensor_w, kernel_dims, split_size, x_strides, options)
+    in_stride, out_stride = x_strides
+    has_dsp, has_multi_kernel = options
+
+    tensor_halfwords = list(_get_tensor_halfwords(tensor_w, kernel_dims, split_size, in_stride))
+    kernel_halfwords = list(_get_kernel_halfwords(kernel_dims, has_multi_kernel))
     load_tensor_lines = _load_tensor_vars(tensor_halfwords, tensor_w)
     load_kernel_lines = _load_kernel_vars(kernel_halfwords)
 
@@ -343,7 +361,7 @@ def optimized_int16_tensordot_impl(
         )
         if has_dsp:
             draft_macs_iter = _apply_simd_optimizations(draft_macs_iter)
-            if has_offset_kernel:
+            if has_multi_kernel:
                 pass
         return _expand_instruction_tuples(draft_macs_iter, index)
 
@@ -353,9 +371,13 @@ def optimized_int16_tensordot_impl(
     def insert_lines(lines):
         return ("\n" + " " * 10).join(lines)
 
+    # __WEAK allows multiple copies of the function to overwrite themselves, saving flash
     return textwrap.dedent(
         f"""
-        __STATIC_FORCEINLINE int fastboi(int *out, int *tensor, int *kernel) {{
+        #include <arm_nnsupportfunctions.h>
+        __STATIC_FORCEINLINE __WEAK int {function_name}(
+            int *out, int *tensor, int *kernel
+        ) {{
           {_init_accumulators(split_size)}
 
           {insert_lines(load_tensor_lines)}
