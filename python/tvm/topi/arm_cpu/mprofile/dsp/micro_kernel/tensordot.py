@@ -179,26 +179,7 @@ def make_intrin_tensordot(slices, strides, tensordot_params):
     )
 
 
-def tensordot_impl(in_dtype: str, tensor_h: int, jump: int, tensor_w: int, suffix: str) -> str:
-    """Generates C code for taking the dot products of two `tensor_h` * `tensor_w` tensors. Also has
-    a `jump` argument that advances the pointer of one tensor by that many words after each row. The
-    `jump` and `tensor_w` values must be word-aligned for the input data type, as non-word-aligned
-    memory access is slow on the Cortex-M series. Depending on the input datatype, the code may
-    contain DSP instructions for Arm v7e-m. C code contains DSP instructions for Arm v7e-m. See
-    the below pseudocode for reference:
-
-    tensordot(out_ptr, dat_ptr, ker_ptr) {
-        sum = 0;
-        for (i = 0; i < tensor_h; i++) {
-            for (j = 0; j < tensor_w; j++) {
-                sum += (*dat_ptr++) * (*ker_ptr++);
-            }
-            dat_ptr += jump;
-        }
-        *out_ptr = sum;
-    }
-    """
-
+def simple_tensordot_impl(in_dtype: str, tensor_h: int, jump: int, tensor_w: int) -> str:
     simd_lanes = num_simd_lanes_per_word(in_dtype)
     assert tensor_w % simd_lanes == 0
     assert jump % simd_lanes == 0
@@ -229,18 +210,15 @@ def tensordot_impl(in_dtype: str, tensor_h: int, jump: int, tensor_w: int, suffi
     return textwrap.dedent(
         (
             f"""
-        #include <stdint.h>
-        #include <arm_nnsupportfunctions.h>
+        #ifndef {function_name.upper()}
+        #define {function_name.upper()}
+        __STATIC_FORCEINLINE int {function_name}(
+            int *out,
+            int *tensor,
+            int *kernel) {{
 
-        #ifdef __cplusplus
-        extern "C"
-        #endif
-        __STATIC_FORCEINLINE int32_t {function_name}(
-            uint32_t *out,
-            uint32_t *tensor,
-            uint32_t *kernel) {{
+          int sum = 0;
 
-          uint32_t sum = 0;
 
           #pragma GCC unroll {tensor_h}
           for (int i = 0; i < {tensor_h}; i++) {{
@@ -255,6 +233,159 @@ def tensordot_impl(in_dtype: str, tensor_h: int, jump: int, tensor_w: int, suffi
           out[0] = sum;
           return 0;
         }}
+        #endif
         """
         )
+    )
+
+
+def _init_accumulators(split_size):
+    var_names = map(lambda x: f"sum_{x:x}", range(num_accumulators))
+    return f"int {var_names.join(", ")};"
+
+
+def _get_tensor_halfwords(tensor_w, kernel_h, kernel_w, split_max):
+    for y in range(kernel_h):
+        if y * tensor_w % 2 == 1:
+            yield None
+        for x in range(kernel_w + split_max):
+            yield (y, x)
+        if (y * tensor_w + kernel_w + split_max) % 2 == 1:
+            yield None
+
+
+def _get_kernel_halfwords(kernel_h, kernel_w):
+    for y in kernel_h:
+        for x in kernel_w:
+            yield (y, x)
+    if len(halfword_vars) % 2:
+        yield None
+
+
+def _get_int16_alias(position):
+    if not position:
+        return "unknown"
+    y, x = position
+    return f"y{y:0>2x}_x{x:0>2x}"
+
+
+def _load_tensor_vars(halfwords, tensor_w):
+    for i in range(0, len(halfwords), 2):
+        var_name = map(_get_int16_alias, halfwords[i:i+2]).join("__")
+        y, x = halfwords[i] or halfwords[i+1]
+        tensor_index = (y * tensor_w + x) // 2
+        return f"int tensor__{var_name} = tensor[{tensor_index}];"
+
+
+def _load_kernel_vars(halfwords):
+    for i in range(0, len(halfwords), 2):
+        var_name = map(_get_int16_alias, halfwords[i:i+2]).join("__")
+        return f"int kernel__{var_name} = kernel[{i // 2}];"
+
+
+def _get_draft_macs(kernel_h, kernel_w, tensor_halfwords, kernel_halfwords, offset):
+    def get_var_location(y, x, halfwords):
+        index = halfwords.index((y, x))
+        if index % 2 == 0:
+            return f"{_get_int16_alias(y, x)}__{_get_int16_alias(var_names[i + 1])}", "b"
+        else:
+            return f"{_get_int16_alias(var_names[i - 1])__{_get_int16_alias(y, x)}}", "t"
+
+    for y in range(kernel_h):
+        for x in range(kernel_w):
+            tensor_var, tensor_half = get_var(y, x + offset, tensor_halfwords)
+            kernel_var, kernel_half = get_var(y, x, kernel_halfwords)
+            yield f"smla{tensor_half}{kernel_half}", tensor_var, kernel_var
+
+
+def _apply_simd_optimizations(instruction_tuples):
+    i = 0
+    while i < len(instruction_tuples):
+        if i == len(instruction_tuples) - 1:
+            yield instruction_tuples[i]
+            break
+
+        curr_ins, *curr_ops = instruction_tuples[i]
+        next_ins, *next_ops = instruction_tuples[i + 1]
+        if curr_ops == next_ops:
+            if set([curr_ins, next_ins]) == set(["smlatt", "smlabb"]):
+                yield "smlad", *curr_ops
+                i += 2
+            elif set([curr_ins, next_ins]) == set(["smlatb", "smlabt"]):
+                yield "smladx", *curr_ops
+                i += 2
+            else:
+                yield curr_ins, *curr_ops
+                i += 1
+
+
+NO_ACC_PREFIX_CONVERSIONS = {
+    "smlad": "smuad",
+    "smladx": "smuadx",
+    "smlatt": "smultt",
+    "smlatb": "smultb",
+    "smlabt": "smulbt",
+    "smlann": "smulbb",
+}
+
+def _expand_instruction_tuple_lists(tuple_lists, index):
+    for j, instruction_tuple in enumerate(instruction_tuples):
+        instruction, op1, op2 = instruction_tuple
+
+        if j == 0:
+            no_acc_instruction = NO_ACC_PREFIX_CONVERSIONS[instruction]
+            yield f"sum_{index} = __builtin_arm_{no_acc_instruction}({op1}, {op2});"
+        else:
+            yield f"sum_{index} = __builtin_arm_{instruction}({op1}, {op2}, sum_{index});"
+
+
+def _write_sums_to_memory(num_sums, out_stride):
+    for i in range(num_sums):
+        yield f"output[{i * out_stride}] = sum_{i};"
+
+
+def optimized_tensordot_impl(in_dtype, tensor_w, kernel_dims, split_size, in_stride, out_stride, has_dsp, has_offset_kernel) -> str:
+    """Code for a specialized version of tensordot, which computes `split_size` tensordot operations
+    at the same time. Only works with `int16`. The generated function takes as input pointers to the
+    output, tensor, and kernel, which must be word-aligned. However, the stride can be half a word.
+    """
+    assert in_dtype == "int16"
+    kernel_h, kernel_w = kernel_dims
+
+    tensor_halfwords = _get_tensor_halfwords(tensor_w, kernel_h, kernel_w, split_size * stride - 1)
+    kernel_halfwords = _get_kernel_halfwords(kernel_h, kernel_w, has_offset_kernel)
+    load_tensor_lines = _load_tensor_vars(tensor_halfwords, tensor_w)
+    load_kernel_lines = _load_kernel_vars(kernel_halfwords)
+
+    optimized_macs = []
+    for offset in range(0, split_size * stride, stride):
+        draft_macs_iter = _get_draft_macs(kernel_h, kernel_w, tensor_halfwords, kernel_halfwords, offset)
+        if has_dsp:
+            draft_macs_iter = _apply_simd_optimizations(list(draft_macs_iter))
+            if has_offset_kernel:
+                pass
+
+        optimized_macs.extend(_expand_instruction_tuple_lists(draft_macs_iter, offset // stride))
+
+    write_out_lines = _write_sums_to_memory(split_size, out_stride)
+
+
+    def insert_lines(lines):
+        return lines.join(" " * 10 + "\n")
+
+    return textwrap.dedent(
+        f"""
+        __STATIC_FORCEINLINE int {function_name}(int *out, int *tensor, int *kernel) {{
+          {_init_accumulators(split_size)}
+
+          {insert_lines(load_tensor_lines)}
+
+          {insert_lines(load_kernel_lines)}
+
+          {insert_lines(optimized_macs)}
+
+          {insert_lines(write_out_lines)}
+          return 0;
+        }}
+        """
     )
