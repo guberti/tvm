@@ -20,10 +20,15 @@ import textwrap
 
 from tvm.topi.arm_cpu.mprofile.dsp.micro_kernel.tensordot import optimized_int16_tensordot_impl
 
+
 def test_write_3x3_depthwise_code():
-    code = optimized_int16_tensordot_impl(48, (3, 3), 1, 1, 1, True, False)
-    assert code == textwrap.dedent("""
-    __STATIC_FORCEINLINE int fastboi(int *out, int *tensor, int *kernel) {
+    code = optimized_int16_tensordot_impl(48, (3, 3), 1, (1, 1), (True, False))
+    assert code == textwrap.dedent(
+        """
+    #include <arm_nnsupportfunctions.h>
+    __STATIC_FORCEINLINE __WEAK int tensordot_opt_x1_int16_w48_3x3_dsp(
+        int *out, int *tensor, int *kernel
+    ) {
       int sum_0;
 
       int tensor__y00_x00__y00_x01 = tensor[0];
@@ -50,4 +55,5 @@ def test_write_3x3_depthwise_code():
       output[0] = sum_0;
       return 0;
     }
-    """)
+    """
+    )
