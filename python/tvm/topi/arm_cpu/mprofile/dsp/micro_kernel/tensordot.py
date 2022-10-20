@@ -45,12 +45,7 @@ def _count_factorization_2s(number):
     return count
 
 
-def _get_func_name(in_dtype, tensor_h, jump, tensor_w):
-    """Gets the C function name of the tensordot function."""
-    return f"tensordot_{in_dtype}_h{tensor_h}_j{jump}_w{tensor_w}"
-
-
-def _get_int16_opt_func_name(tensor_w, kernel_dims, split_size, x_strides, options):
+def _get_func_name(tensor_w, kernel_dims, split_size, x_strides, options):
     """Gets the C function name of the tensordot function."""
     return (
         f"tensordot_opt_x{split_size}_int16_w{tensor_w}_"
@@ -59,67 +54,6 @@ def _get_int16_opt_func_name(tensor_w, kernel_dims, split_size, x_strides, optio
         + ("_dsp" if options[0] else "")
         + ("_2xkernel" if options[1] else "")
     )
-
-
-def static_kernel_reshape(kernel, tensor_w, strides, simd_lanes):
-    """When we get the kernel, it will be in the correct data layout (it will be altered during the
-    legalization step). For the int32 dtype, we're done. But for int8 and int16, we still have an
-    issue: non-word-aligned memory loads on Cortex-M take way longer! This manifests in two ways:
-
-      1. Let's do depthwise convolution with a `Mx5` kernel, `in_dtype == "int16"`, `tensor_w = 48`,
-         and `strides = (1, 2)`. The input tensor will be formatted along word boundries as:
-         ```
-             0x0000   0x0001 | 0x0002   0x0003 | 0x0004   0x0005 | ...
-             0x0030   0x0031 | 0x0032   0x0033 | 0x0034   0x0035 | ...
-         ```
-         However, the input tensor will look like:
-         ```
-             0x0000   0x0001 | 0x0002   0x0003 | 0x0004
-             0x0005 | 0x0006   0x0007 | 0x0008   0x0009
-         ```
-         To be fast, we will want to run `SMLAD(0x0030   0x0031, 0x0005 | 0x0006)` and so on when
-         convolving the second rows. But since `0x0005 | 0x0006` spans a word boundry, we can't do
-         this fast! Starting two bytes to the right doesn't help either, as then `0x0031 | 0x0032`
-         spans a word boundry.
-
-         The problem is even worse than it sounds. Suppose `tensor_w = 49` instead. And with the
-         `int8` dtype, three in four rows will not start word aligned!
-
-
-      2. Next, consider when the horizontal stride (in bytes) is *not* a multiple of the number of
-         SIMD lanes. This is guaranteed to shift the word alignment for every horizontal stride (and
-         sometimes on vertical strides too), leading to unaligned word divides between the input
-         tensor and kernel. Note that in practice, this issue rarely happens for regular Conv2Ds,
-         and happens *all the time* for depthwise Conv2Ds.
-
-
-    All solutions to these issues require more flash memory. There are other approaches, but for the
-    sake of generality we choose to duplicate the kernel once for each SIMD lane offset. This change
-    can be enabled or disabled via autotuning."""
-
-    assert _is_pow_2(simd_lanes)
-    kernel_h, kernel_w = kernel.shape
-
-    # We want kernel_w % simd_lanes to equal tensor_w % simd_lanes
-    zero_pad_w = (tensor_w - kernel_w) % simd_lanes
-    padded_kernel = np.pad(kernel, ((0, 0), (0, zero_pad_w)))
-
-    shift_w = stride_w % simd_lanes
-    shift_h = stride_h * tensor_w % simd_lanes
-    copy_shift = min(_count_factorization_2s(shift_w), _count_factorization_2s(shift_h))
-
-    num_kernel_copies = simd_lanes // copy_shift
-    len_kernel_copies = (kernel_w + zero_pad_w) * kernel_h + copy_shift
-    assert (num_kernel_copies * len_kernel_copies) % simd_lanes == 0
-
-    flat_kernel = np.ravel(padded_kernel)
-    flat_output = np.zeros((num_kernel_copies * len_kernel_copies))
-
-    # Copy our flattened kernel at each location
-    for i in range(num_kernel_copies):
-        flat_output[i * len_kernel_copies : (i + 1) * len_kernel_copies] = flat_kernel
-
-    return flat_output.reshape(num_kernel_copies, len_kernel_copies)
 
 
 def make_intrin_tensordot(slices, strides, tensordot_params):
@@ -162,65 +96,6 @@ def make_intrin_tensordot(slices, strides, tensordot_params):
         output.op,
         intrin_func,
         binds={data: data_buf, kernel: kernel_buf, output: output_buf},
-    )
-
-
-def tensordot_impl(in_dtype: str, tensor_h: int, jump: int, tensor_w: int) -> str:
-    simd_lanes = num_simd_lanes_per_word(in_dtype)
-    assert tensor_w % simd_lanes == 0
-    assert jump % simd_lanes == 0
-
-    if in_dtype == "int8":
-        inner_loop = """
-              uint32_t tensor_c20 = __SXTB16(tensor_batch);
-              uint32_t kernel_c20 = __SXTB16(kernel_batch);
-              sum = __SMLAD(tensor_c20, kernel_c20, sum);
-
-              uint32_t tensor_c31 = __SXTB16(__ROR(tensor_batch, 8));
-              uint32_t kernel_c31 = __SXTB16(__ROR(kernel_batch, 8));
-              sum = __SMLAD(tensor_c31, kernel_c31, sum);"""
-
-    elif in_dtype == "int16":
-        inner_loop = """
-              sum = __SMLAD(tensor_batch, kernel_batch, sum);"""
-
-    elif in_dtype == "int32":
-        inner_loop = """
-              // Compiles to a single MAC instruction
-              sum += tensor_batch * kernel_batch;"""
-
-    else:
-        raise ValueError(f"No tensordot implementation exists for dtype '{in_dtype}'!")
-
-    function_name = _get_func_name(in_dtype, tensor_h, jump, tensor_w)
-    return textwrap.dedent(
-        (
-            f"""
-        #include <arm_nnsupportfunctions.h>
-        __STATIC_FORCEINLINE __WEAK int {function_name}(
-            int *out,
-            int *tensor,
-            int *kernel) {{
-
-          int sum = 0;
-
-
-          #pragma GCC unroll {tensor_h}
-          for (int i = 0; i < {tensor_h}; i++) {{
-            #pragma GCC unroll {tensor_w // simd_lanes}
-            for (int j = 0; j < {tensor_w // simd_lanes}; j++) {{
-              uint32_t tensor_batch = *tensor++;
-              uint32_t kernel_batch = *kernel++;
-              {inner_loop.strip()}
-            }}
-            tensor += {jump // simd_lanes};
-          }}
-          out[0] = sum;
-          return 0;
-        }}
-        #endif
-        """
-        )
     )
 
 
@@ -335,7 +210,7 @@ def _write_sums_to_memory(num_sums, out_stride) -> Iterator[str]:
         yield f"output[{i * out_stride}] = sum_{i};"
 
 
-def optimized_int16_tensordot_impl(
+def tensordot_int16_impl(
     tensor_w: int,
     kernel_dims: Tuple[int, int],
     split_size: int,
