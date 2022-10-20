@@ -32,7 +32,7 @@ from tvm.topi.nn.pad import pad
 
 from .micro_kernel.tensordot import (
     make_intrin_tensordot,
-    tensordot_impl,
+    tensordot_int16_impl,
 )
 
 
@@ -115,7 +115,7 @@ def _get_suffix() -> str:
     return "".join(random.choices(string.ascii_uppercase, k=8))
 
 
-def conv2d_nhwc_ohwi_dsp_compute(
+def conv2d_int16_tensordot_compute(
     _cfg, data, kernel, strides, padding, dilation, out_layout, out_dtype
 ):
     """Standard conv2d schedule that can be tensorized using tensordot."""
@@ -143,9 +143,9 @@ def conv2d_nhwc_ohwi_dsp_compute(
             * kernel[c, kh_i, kw_i, kc_i].astype(out_dtype),
             axis=(kh_i, kw_i, kc_i),
         ),
-        out_layout,
+        "NHWC",
         name="conv2d",
-        tag="conv2d_nhwc_ohwi_dsp",
+        tag="conv2d_int16_tensordot",
     )
 
 
@@ -188,7 +188,7 @@ def _make_conv2d_tensorization(padded_data, kernel):
     return (intrin_tensordot, tensordot_code)
 
 
-def depthwise_conv2d_nchw_oihw_dsp_compute(
+def depthwise_conv2d_int16_tensordot_compute(
     _cfg, data, kernel, strides, padding, dilation, out_layout, out_dtype
 ):
     """Depthwise conv2d schedule that can be tensorized using tensordot."""
@@ -221,18 +221,19 @@ def depthwise_conv2d_nchw_oihw_dsp_compute(
             * kernel[indexdiv(c, c_mul), indexmod(c, c_mul), kh_i, kw_i].astype(out_dtype),
             axis=(kh_i, kw_i),
         ),
-        out_layout,
+        "NCHW",
         name="depthwise_conv2d",
-        tag="depthwise_conv2d_nchw_oihw_dsp",
+        tag="depthwise_conv2d_int16_tensordot_dsp",
     )
 
 
-def _make_depthwise_conv2d_tensorization(padded_data, kernel):
+def _make_depthwise_conv2d_tensorization(padded_data, kernel, split_size, x_strides, options):
     _, _, _, padded_w = padded_data.shape
     _, _, kernel_h, kernel_w = kernel.shape
+    in_stride, _ = x_strides
+
 
     in_dtype = padded_data.dtype
-    suffix = _get_suffix()
     assert in_dtype == kernel.dtype
 
     data_slice = te.placeholder((kernel_h, kernel_w), name="a", dtype=in_dtype)
@@ -242,23 +243,23 @@ def _make_depthwise_conv2d_tensorization(padded_data, kernel):
     kw_i = te.reduce_axis((0, kernel_w), name="kw_i")
 
     output_slice = te.compute(
-        (1,),
+        (split_size,),
         lambda k: te.sum(
-            data_slice[kh_i, kw_i].astype("int32") * kernel_slice[kh_i, kw_i].astype("int32"),
+            data_slice[kh_i, kw_i + k * in_stride].astype("int32") *
+            kernel_slice[kh_i, kw_i].astype("int32"),
             axis=[kh_i, kw_i],
         ),
         name="c",
     )
 
-    jump = padded_w - kernel_w
-    tensordot_params = (in_dtype, kernel_h, jump, kernel_w, suffix)
+    tensordot_params = (padded_w, (kernel_h, kernel_w), split_size, x_strides, options)
     intrin_tensordot = make_intrin_tensordot(
         (data_slice, kernel_slice, output_slice),
         ([padded_w, 1], [kernel_w, 1]),
         tensordot_params,
     )
 
-    tensordot_code = tensordot_impl(*tensordot_params)
+    tensordot_code = tensordot_int16_impl(*tensordot_params)
     return (intrin_tensordot, tensordot_code)
 
 
@@ -269,22 +270,23 @@ def tensordot_conv2ds_schedule(_cfg, outs):
     schedule = te.create_schedule([x.op for x in outs])
 
     def _callback(operator):
-        if "conv2d" in operator.tag:
+        if "conv2d_int16" in operator.tag:
             output = operator.output(0)
             padded_data = output.op.input_tensors[0]
             kernel = output.op.input_tensors[1]
 
-            if operator.tag == "conv2d_nhwc_ohwi_dsp":
+            if operator.tag == "conv2d_int16_tensordot":
                 b_ax, y_ax, x_ax, co_ax = schedule[output].op.axis
                 kh_ax, kw_ax, ci_ax = schedule[output].op.reduce_axis
                 schedule[output].reorder(b_ax, y_ax, x_ax, co_ax, kh_ax, kw_ax, ci_ax)
                 intrin, code = _make_conv2d_tensorization(padded_data, kernel)
 
-            elif operator.tag == "depthwise_conv2d_nchw_oihw_dsp":
-                b_ax, y_ax, x_ax, co_ax = schedule[output].op.axis
+            elif operator.tag == "depthwise_conv2d_int16_tensordot":
+                b_ax, co_ax, y_ax, x_ax = schedule[output].op.axis
                 kh_ax, kw_ax = schedule[output].op.reduce_axis
-                schedule[output].reorder(b_ax, co_ax, y_ax, x_ax, kh_ax, kw_ax)
-                intrin, code = _make_depthwise_conv2d_tensorization(padded_data, kernel)
+                xo_ax, xi_ax = schedule[output].split(x_ax, factor=2)
+                schedule[output].reorder(b_ax, co_ax, y_ax, xo_ax, xi_ax, kh_ax, kw_ax)
+                intrin, code = _make_depthwise_conv2d_tensorization(padded_data, kernel, 2, (1, 1), (True, False))
 
             else:
                 raise ValueError(f"Cannot tensorize {operator.tag} with tensordot!")

@@ -724,17 +724,17 @@ def schedule_depthwise_conv2d_nhwc_dsp(cfg, outs):
     return depthwise_conv2d_nhwc_dsp_schedule(cfg, outs)
 
 
-@autotvm.register_topi_compute("depthwise_conv2d_nchw_oihw_dsp.arm_cpu")
-def depthwise_conv2d_nchw_oihw_dsp(
+@autotvm.register_topi_compute("depthwise_conv2d_int16_tensordot.arm_cpu")
+def depthwise_conv2d_int16_tensordot(
     cfg, data, kernel, strides, padding, dilation, out_layout, out_dtype
 ):
-    """Compute depthwise_conv2d_nchw_oihw with v7e-m DSP instructions and the tensordot kernel."""
+    """Compute depthwise_conv2d_int16_tensordot with v7e-m DSP instructions and the tensordot kernel."""
     return depthwise_conv2d_nchw_oihw_dsp_compute(
         cfg, data, kernel, strides, padding, dilation, out_layout, out_dtype
     )
 
 
-@autotvm.register_topi_schedule("depthwise_conv2d_nchw_oihw_dsp.arm_cpu")
-def schedule_depthwise_conv2d_nchw_oihw_dsp(cfg, outs):
-    """Create schedule for depthwise_conv2d_nchw_oihw."""
+@autotvm.register_topi_schedule("depthwise_conv2d_int16_tensordot.arm_cpu")
+def schedule_depthwise_conv2d_int16_tensordot(cfg, outs):
+    """Create schedule for depthwise_conv2d_int16_tensordot."""
     return tensordot_conv2ds_schedule(cfg, outs)
