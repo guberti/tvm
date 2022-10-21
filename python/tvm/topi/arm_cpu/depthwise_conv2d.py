@@ -32,7 +32,7 @@ from .mprofile.dsp.depthwise_conv2d import (
     depthwise_conv2d_nhwc_dsp_schedule,
 )
 from .mprofile.dsp.tensordot_conv2ds import (
-    depthwise_conv2d_nchw_oihw_dsp_compute,
+    depthwise_conv2d_int16_tensordot_compute,
     tensordot_conv2ds_schedule,
 )
 
@@ -729,7 +729,7 @@ def depthwise_conv2d_int16_tensordot(
     cfg, data, kernel, strides, padding, dilation, out_layout, out_dtype
 ):
     """Compute depthwise_conv2d_int16_tensordot with v7e-m DSP instructions and the tensordot kernel."""
-    return depthwise_conv2d_nchw_oihw_dsp_compute(
+    return depthwise_conv2d_int16_tensordot_compute(
         cfg, data, kernel, strides, padding, dilation, out_layout, out_dtype
     )
 
