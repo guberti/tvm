@@ -25,14 +25,14 @@ import string
 from typing import Callable, Tuple, Union
 
 import tvm
-from tvm import te
+from tvm import te, tir
 from tvm.tir import indexdiv, indexmod
-from tvm.topi.utils import traverse_inline
+from tvm.topi.utils import get_const_tuple, traverse_inline
 from tvm.topi.nn.pad import pad
 
 from .micro_kernel.tensordot import (
-    make_intrin_tensordot,
     tensordot_int16_impl,
+    get_c_function_name,
 )
 
 
@@ -178,11 +178,7 @@ def _make_conv2d_tensorization(padded_data, kernel):
     height_stride = in_channels * padded_w if kernel_h > 1 else in_channels
     jump = (padded_w - kernel_w) * in_channels
     tensordot_params = (in_dtype, kernel_h, jump, kernel_w * in_channels, suffix)
-    intrin_tensordot = make_intrin_tensordot(
-        (data_slice, kernel_slice, output_slice),
-        ([height_stride, in_channels, 1], [kernel_w * in_channels, in_channels, 1]),
-        tensordot_params,
-    )
+    intrin_tensordot = None
 
     tensordot_code = tensordot_impl(*tensordot_params)
     return (intrin_tensordot, tensordot_code)
@@ -223,40 +219,76 @@ def depthwise_conv2d_int16_tensordot_compute(
         ),
         "NCHW",
         name="depthwise_conv2d",
-        tag="depthwise_conv2d_int16_tensordot_dsp",
+        tag="depthwise_conv2d_int16_tensordot",
     )
 
 
+def _make_intrin_func(func_name):
+    def intrin_func(ins, outs):
+        builder = tir.ir_builder.create()
+        builder.emit(
+            tir.call_extern(
+                "int32",
+                func_name,
+                outs[0].access_ptr("w"),
+                ins[0].access_ptr("r"),
+                ins[1].access_ptr("r"),
+            )
+        )
+        return builder.get()
+    return intrin_func
+
+
 def _make_depthwise_conv2d_tensorization(padded_data, kernel, split_size, x_strides, options):
-    _, _, _, padded_w = padded_data.shape
-    _, _, kernel_h, kernel_w = kernel.shape
+    _, _, _, padded_w = get_const_tuple(padded_data.shape)
+    _, _, kernel_h, kernel_w = get_const_tuple(kernel.shape)
     in_stride, _ = x_strides
 
 
     in_dtype = padded_data.dtype
     assert in_dtype == kernel.dtype
 
-    data_slice = te.placeholder((kernel_h, kernel_w), name="a", dtype=in_dtype)
+    data_slice = te.placeholder((kernel_h, kernel_w + split_size - 1), name="a", dtype=in_dtype)
+    print("Data slice shape")
+    print(data_slice.shape)
     kernel_slice = te.placeholder((kernel_h, kernel_w), name="b", dtype=in_dtype)
 
     kh_i = te.reduce_axis((0, kernel_h), name="kh_i")
     kw_i = te.reduce_axis((0, kernel_w), name="kw_i")
-
+    assert split_size == 2
     output_slice = te.compute(
         (split_size,),
         lambda k: te.sum(
-            data_slice[kh_i, kw_i + k * in_stride].astype("int32") *
+            data_slice[kh_i, k + kw_i].astype("int32") *
             kernel_slice[kh_i, kw_i].astype("int32"),
             axis=[kh_i, kw_i],
         ),
         name="c",
     )
 
+    data_buf = tir.decl_buffer(
+        data_slice.shape,
+        data_slice.dtype,
+        name="data",
+        offset_factor=1,
+        strides=[padded_w, 1],
+    )
+    kernel_buf = tir.decl_buffer(
+        kernel_slice.shape,
+        kernel_slice.dtype,
+        name="kernel",
+        offset_factor=1,
+        strides=[kernel_w, 1],
+    )
+    output_buf = tir.decl_buffer(
+        output_slice.shape, output_slice.dtype, name="output", offset_factor=1, strides=[1]
+    )
+
     tensordot_params = (padded_w, (kernel_h, kernel_w), split_size, x_strides, options)
-    intrin_tensordot = make_intrin_tensordot(
-        (data_slice, kernel_slice, output_slice),
-        ([padded_w, 1], [kernel_w, 1]),
-        tensordot_params,
+    intrin_tensordot = te.decl_tensor_intrin(
+        output_slice.op,
+        _make_intrin_func(get_c_function_name(*tensordot_params)),
+        binds={data_slice: data_buf, kernel_slice: kernel_buf, output_slice: output_buf},
     )
 
     tensordot_code = tensordot_int16_impl(*tensordot_params)
@@ -291,7 +323,7 @@ def tensordot_conv2ds_schedule(_cfg, outs):
             else:
                 raise ValueError(f"Cannot tensorize {operator.tag} with tensordot!")
 
-            schedule[output].tensorize(kh_ax, intrin)
+            schedule[output].tensorize(xi_ax, intrin)
             schedule[output].pragma(b_ax, "import_c", code)
 
     traverse_inline(schedule, outs[-1].op, _callback)

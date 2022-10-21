@@ -27,8 +27,16 @@ import numpy as np
 
 from tvm import te, tir
 
-from .common import num_simd_lanes_per_word
 
+def get_c_function_name(tensor_w, kernel_dims, split_size, x_strides, options):
+    """Gets the C function name of the tensordot function."""
+    return (
+        f"tensordot_opt_x{split_size}_int16_w{tensor_w}_"
+        + f"{kernel_dims[0]}x{kernel_dims[1]}"
+        + (f"_{x_strides[0]}_{x_strides[1]}" if split_size > 1 else "")
+        + ("_dsp" if options[0] else "")
+        + ("_2xkernel" if options[1] else "")
+    )
 
 def _is_pow_2(number):
     """Checks if `number` is a power of `2`."""
@@ -43,60 +51,6 @@ def _count_factorization_2s(number):
         number // 2
         count += 1
     return count
-
-
-def _get_func_name(tensor_w, kernel_dims, split_size, x_strides, options):
-    """Gets the C function name of the tensordot function."""
-    return (
-        f"tensordot_opt_x{split_size}_int16_w{tensor_w}_"
-        + f"{kernel_dims[0]}x{kernel_dims[1]}"
-        + (f"_{x_strides[0]}_{x_strides[1]}" if split_size > 1 else "")
-        + ("_dsp" if options[0] else "")
-        + ("_2xkernel" if options[1] else "")
-    )
-
-
-def make_intrin_tensordot(slices, strides, tensordot_params):
-    """Helper function for constructing tensordot intrinsic. We can't construct the whole thing here
-    (as multiple schedules use tensordot and each must build the intrinstic differently) but we can
-    build part here to simplify the code."""
-
-    # in_dtype, tensor_h, jump, tensor_w = tensordot_params
-    data, kernel, output = slices
-    data_strides, kernel_strides = strides
-
-    data_buf = tir.decl_buffer(
-        data.shape, data.dtype, name="data", offset_factor=1, strides=data_strides
-    )
-    kernel_buf = tir.decl_buffer(
-        kernel.shape,
-        kernel.dtype,
-        name="kernel",
-        offset_factor=1,
-        strides=kernel_strides,
-    )
-    output_buf = tir.decl_buffer(
-        output.shape, output.dtype, name="output", offset_factor=1, strides=[1]
-    )
-
-    def intrin_func(ins, outs):
-        builder = tir.ir_builder.create()
-        builder.emit(
-            tir.call_extern(
-                "int32",
-                _get_func_name(*tensordot_params),
-                outs[0].access_ptr("w"),
-                ins[0].access_ptr("r"),
-                ins[1].access_ptr("r"),
-            )
-        )
-        return builder.get()
-
-    return te.decl_tensor_intrin(
-        output.op,
-        intrin_func,
-        binds={data: data_buf, kernel: kernel_buf, output: output_buf},
-    )
 
 
 def _init_accumulators(split_size):
@@ -221,7 +175,7 @@ def tensordot_int16_impl(
     at the same time. Only works with `int16`. The generated function takes as input pointers to the
     output, tensor, and kernel, which must be word-aligned. However, the stride can be half a word.
     """
-    function_name = _get_int16_opt_func_name(tensor_w, kernel_dims, split_size, x_strides, options)
+    function_name = get_c_function_name(tensor_w, kernel_dims, split_size, x_strides, options)
     in_stride, out_stride = x_strides
     has_dsp, has_multi_kernel = options
 

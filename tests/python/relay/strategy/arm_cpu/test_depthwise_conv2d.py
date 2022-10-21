@@ -121,7 +121,7 @@ class TestDepthwiseConv2d_Int16_Tensordot(DepthwiseConv2dTests):
 
     data_layout = parameter("NCHW")
     kernel_layout = parameter("OIHW")
-    out_layout = parameter("NHWC", "NCHW")
+    out_layout = parameter("NCHW")
     schedule_name = parameter("depthwise_conv2d_int16_tensordot.arm_cpu")
 
 

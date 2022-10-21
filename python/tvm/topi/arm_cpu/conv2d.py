@@ -38,7 +38,7 @@ from .mprofile.dsp.conv2d import (
     conv2d_nhwc_dsp_schedule,
 )
 from .mprofile.dsp.tensordot_conv2ds import (
-    conv2d_nhwc_ohwi_dsp_compute,
+    conv2d_int16_tensordot_compute,
     tensordot_conv2ds_schedule,
 )
 

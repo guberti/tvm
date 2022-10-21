@@ -242,18 +242,13 @@ def conv2d_strategy_arm_cpu(attrs, inputs, out_type, target):
             assert kernel_layout == "OIHW" or re.match(r"OIHW\d*o", kernel_layout)
             if kernel_layout == "OIHW":
                 data_width_padding = _get_padding_width(padding)
-                if (
-                    target.features.has_dsp
-                    and dilation_w == dilation_h == 1
-                    and _is_simd_aligned(data.dtype, data.shape[3:], padding=(data_width_padding,))
-                    and _is_simd_aligned(kernel.dtype, kernel.shape[3:])
-                ):
+                if (dilation_w == dilation_h == 1):
                     strategy.add_implementation(
                         wrap_compute_conv2d(
-                            topi.arm_cpu.depthwise_conv2d_nchw_oihw_dsp, need_out_layout=True
+                            topi.arm_cpu.depthwise_conv2d_int16_tensordot, need_out_layout=True
                         ),
-                        wrap_topi_schedule(topi.arm_cpu.schedule_depthwise_conv2d_nchw_oihw_dsp),
-                        name="depthwise_conv2d_nchw_oihw_dsp.arm_cpu",
+                        wrap_topi_schedule(topi.arm_cpu.schedule_depthwise_conv2d_int16_tensordot),
+                        name="depthwise_conv2d_int16_tensordot.arm_cpu",
                     )
                 else:
                     strategy.add_implementation(
