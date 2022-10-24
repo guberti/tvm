@@ -56,7 +56,7 @@ def _count_factorization_2s(number):
 def _init_accumulators(split_size):
     var_names = map(lambda x: f"sum_{x:x}", range(split_size))
     joined_var_names = ", ".join(var_names)
-    return f"int {joined_var_names};"
+    return f"int {joined_var_names} = 0;"
 
 
 def _get_tensor_halfwords(tensor_w, kernel_dims, split_size, in_stride) -> Iterator:
@@ -101,7 +101,7 @@ def _load_kernel_vars(halfwords) -> Iterator[str]:
         yield f"int kernel__{var_name} = kernel[{i // 2}];"
 
 
-def _get_draft_macs(kernel_dims, tensor_halfwords, kernel_halfwords, offset) -> Iterator[str]:
+def _get_draft_macs(kernel_dims, tensor_halfwords, kernel_halfwords, offset) -> Iterator[Tuple]:
     def get_var(y, x, halfwords):
         i = halfwords.index((y, x))
         if i % 2 == 0:
@@ -114,10 +114,10 @@ def _get_draft_macs(kernel_dims, tensor_halfwords, kernel_halfwords, offset) -> 
         for x in range(kernel_w):
             tensor_var, tensor_half = get_var(y, x + offset, tensor_halfwords)
             kernel_var, kernel_half = get_var(y, x, kernel_halfwords)
-            yield f"smla{tensor_half}{kernel_half}", tensor_var, kernel_var
+            yield f"smla{tensor_half}{kernel_half}", f"tensor__{tensor_var}", f"kernel__{kernel_var}"
 
 
-def _apply_simd_optimizations(instruction_tuples) -> Iterator[str]:
+def _apply_simd_optimizations(instruction_tuples) -> Iterator[Tuple]:
     curr_tuple = next(instruction_tuples, None)
     while curr_tuple:
         next_tuple = next(instruction_tuples, None)
@@ -150,14 +150,51 @@ NO_ACC_PREFIX_CONVERSIONS = {
 }
 
 
-def _expand_instruction_tuples(tuples, index) -> Iterator[str]:
-    prefix = f"sum_{index} = __builtin_arm"
-    instruction_name, op1, op2 = next(tuples)
-    no_accumulate = NO_ACC_PREFIX_CONVERSIONS[instruction_name]
-    yield f"{prefix}_{no_accumulate}(tensor__{op1}, kernel__{op2});"
-    for instruction_name, op1, op2 in tuples:
-        yield f"{prefix}_{instruction_name}(tensor__{op1}, kernel__{op2}, sum_{index});"
+def _no_first_accumulate(instruction_tuples) -> Iterator[Tuple]:
+    ins, op1, op2 = next(instruction_tuples)
+    yield NO_ACC_PREFIX_CONVERSIONS[ins], op1, op2
+    for instruction_tuple in instruction_tuples:
+        yield instruction_tuple
 
+
+
+def _expand_instruction_tuples(instruction_tuples, index) -> Iterator[str]:
+    """Converts a series of (instruction, var1, var2) tuples into lines of C code. Should be simple,
+    but we need to work around a series of cryptic bugs while ensuring the compiler makes certain
+    optimizations.
+
+    1. Ideally, we would call __builtin_arm functions instead of including inline assembly, as this
+       is easier to read and more future proof. However:
+        a. Arm GCC apparently *forgot* to include `__builtin_arm_smlabt`, even though
+           `__builtin_arm_smlatt`, `__builtin_arm_smlatb`, `__builtin_arm_smlad` and so on all
+           exist. These work as expected on Clang - the issue is GCC only.
+
+        b. Calling `__builtin_arm_smlatt` (and `smlatb` and `smlabb`) works fine on real devices.
+           However, calling these builtins causes the Corstone300 simulator to freeze and stall. I
+           have no clue on why this is - wouldn't these builtins be compiled to assembly? - yet it
+           occurs consistently.
+
+
+    2. Ideally, the compiler would know that the first multiply instruction should *not* accumulate,
+       and would automatically replace it with an otherwise identical but non-accumulating
+       instruction. Doing this saves us one cycle, as we don't need to load a zero into sum_i.
+       However, the compiler (understandably) does not like overwriting instructions we explicitly
+       as for, so we must do this ourselves.
+
+    3. Ideally, since we're going to emit several lines of assembly code, we would do it in a single
+       `asm` block. However, we *want* the compiler to reorder the instructions and interleave them
+       with memory loads, and it can only do this if we specify the instructions as individual non-
+       volatile memory loads.
+    """
+    for instruction, op1, op2 in instruction_tuples:
+        if "smla" in instruction:
+            if instruction == "smlabt":
+                yield f"sum_{index} = __builtin_arm_smlatb({op2}, {op1}, sum_{index});"
+            else:
+                yield f"sum_{index} = __builtin_arm_{instruction}({op1}, {op2}, sum_{index});"
+
+        else:
+            yield f'asm ("{instruction} %0, %1, %2" : "=r" (sum_{index}) : "r" ({op1}), "r" ({op2}));'
 
 def _write_sums_to_memory(num_sums, out_stride) -> Iterator[str]:
     for i in range(num_sums):
@@ -190,13 +227,14 @@ def tensordot_int16_impl(
         )
         if has_dsp:
             draft_macs_iter = _apply_simd_optimizations(draft_macs_iter)
-            if has_multi_kernel:
-                pass
+
+        #draft_macs_iter = _no_first_accumulate(draft_macs_iter)
         return _expand_instruction_tuples(draft_macs_iter, index)
 
     multiply_acc_lines = chain.from_iterable(gen_single_loop_macs(i) for i in range(split_size))
     write_out_lines = _write_sums_to_memory(split_size, out_stride)
-
+    for line in multiply_acc_lines:
+        print(line)
     def insert_lines(lines):
         return ("\n" + " " * 10).join(lines)
 
@@ -205,17 +243,42 @@ def tensordot_int16_impl(
         f"""
         #include <arm_nnsupportfunctions.h>
         __STATIC_FORCEINLINE __WEAK int {function_name}(
-            int *out, int *tensor, int *kernel
+            int *output, int *tensor, int *kernel
         ) {{
-          {_init_accumulators(split_size)}
+          int sum_0, sum_1 = 0;
 
-          {insert_lines(load_tensor_lines)}
+          int tensor__y00_x00__y00_x01 = tensor[0];
+          int tensor__y00_x02__y00_x03 = tensor[1];
+          int tensor__y01_x00__y01_x01 = tensor[25];
+          int tensor__y01_x02__y01_x03 = tensor[26];
+          int tensor__y02_x00__y02_x01 = tensor[50];
+          int tensor__y02_x02__y02_x03 = tensor[51];
 
-          {insert_lines(load_kernel_lines)}
+          int kernel__y00_x00__y00_x01 = kernel[0];
+          int kernel__y01_x01__y01_x02 = kernel[2];
+          int kernel__y02_x02__unknown = kernel[4];
 
-          {insert_lines(multiply_acc_lines)}
+          // Replace all calls to kernel[1] with this line to make the bug happen
+          //int kernel__y00_x02__y01_x00 = kernel[1];
 
-          {insert_lines(write_out_lines)}
+          sum_0 = __builtin_arm_smlad(tensor__y00_x00__y00_x01, kernel__y00_x00__y00_x01, sum_0);
+          sum_0 = __builtin_arm_smlabb(tensor__y00_x02__y00_x03, kernel[1], sum_0);
+          sum_0 = __builtin_arm_smlatb(kernel[1], tensor__y01_x00__y01_x01, sum_0);
+          sum_0 = __builtin_arm_smlatb(tensor__y01_x00__y01_x01, kernel__y01_x01__y01_x02, sum_0);
+          sum_0 = __builtin_arm_smlatb(kernel__y01_x01__y01_x02, tensor__y01_x02__y01_x03, sum_0);
+          sum_0 = __builtin_arm_smlad(tensor__y02_x00__y02_x01, kernel[3], sum_0);
+          sum_0 = __builtin_arm_smlabb(tensor__y02_x02__y02_x03, kernel__y02_x02__unknown, sum_0);
+          sum_1 = __builtin_arm_smlatb(tensor__y00_x00__y00_x01, kernel__y00_x00__y00_x01, sum_1);
+          sum_1 = __builtin_arm_smlatb(kernel__y00_x00__y00_x01, tensor__y00_x02__y00_x03, sum_1);
+          sum_1 = __builtin_arm_smlatb(tensor__y00_x02__y00_x03, kernel[1], sum_1);
+          sum_1 = __builtin_arm_smlatt(tensor__y01_x00__y01_x01, kernel[1], sum_1);
+          sum_1 = __builtin_arm_smlad(tensor__y01_x02__y01_x03, kernel__y01_x01__y01_x02, sum_1);
+          sum_1 = __builtin_arm_smlatb(tensor__y02_x00__y02_x01, kernel[3], sum_1);
+          sum_1 = __builtin_arm_smlatb(kernel[3], tensor__y02_x02__y02_x03, sum_1);
+          sum_1 = __builtin_arm_smlatb(tensor__y02_x02__y02_x03, kernel__y02_x02__unknown, sum_1);
+
+          output[0] = sum_0;
+          output[1] = sum_1;
           return 0;
         }}
         """
