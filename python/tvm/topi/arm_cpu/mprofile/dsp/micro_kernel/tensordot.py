@@ -56,7 +56,7 @@ def _count_factorization_2s(number):
 def _init_accumulators(split_size):
     var_names = map(lambda x: f"sum_{x:x}", range(split_size))
     joined_var_names = ", ".join(var_names)
-    return f"int {joined_var_names} = 0;"
+    return f"int {joined_var_names};"
 
 
 def _get_tensor_halfwords(tensor_w, kernel_dims, split_size, in_stride) -> Iterator:
@@ -227,6 +227,8 @@ def tensordot_int16_impl(
         )
         if has_dsp:
             draft_macs_iter = _apply_simd_optimizations(draft_macs_iter)
+        draft_macs_iter = _no_first_accumulate(draft_macs_iter)
+
         return _expand_instruction_tuples(draft_macs_iter, index)
 
     multiply_acc_lines = chain.from_iterable(gen_single_loop_macs(i) for i in range(split_size))
@@ -236,7 +238,7 @@ def tensordot_int16_impl(
         return ("\n" + " " * 10).join(lines)
 
     # __WEAK allows multiple copies of the function to overwrite themselves, saving flash
-    return textwrap.dedent(
+    code = textwrap.dedent(
         f"""
         #include <arm_nnsupportfunctions.h>
         __STATIC_FORCEINLINE __WEAK int {function_name}(
@@ -255,4 +257,6 @@ def tensordot_int16_impl(
         }}
         """
     )
+    print(code)
+    return code
 
