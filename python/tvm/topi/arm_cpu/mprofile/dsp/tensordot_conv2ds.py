@@ -249,8 +249,6 @@ def _make_depthwise_conv2d_tensorization(padded_data, kernel, split_size, x_stri
     assert in_dtype == kernel.dtype
 
     data_slice = te.placeholder((kernel_h, kernel_w + split_size - 1), name="a", dtype=in_dtype)
-    print("Data slice shape")
-    print(data_slice.shape)
     kernel_slice = te.placeholder((kernel_h, kernel_w), name="b", dtype=in_dtype)
 
     kh_i = te.reduce_axis((0, kernel_h), name="kh_i")

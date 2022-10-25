@@ -114,8 +114,7 @@ class TestDepthwiseConv2d_Int16_Tensordot(DepthwiseConv2dTests):
     """This test is for the depthwise_conv2d schedule tensorized using tensordot."""
 
     data_shape, kernel_size, num_filter, strides, padding = parameters(
-        ((1, 48, 48, 8), (3, 3), 8, (1, 1), 1),
-
+        ((1, 48, 48, 8), (4, 3), 8, (1, 1), 1),
     )
     in_dtype = parameter("int16")
     dilation = parameter(1)

@@ -227,14 +227,11 @@ def tensordot_int16_impl(
         )
         if has_dsp:
             draft_macs_iter = _apply_simd_optimizations(draft_macs_iter)
-
-        #draft_macs_iter = _no_first_accumulate(draft_macs_iter)
         return _expand_instruction_tuples(draft_macs_iter, index)
 
     multiply_acc_lines = chain.from_iterable(gen_single_loop_macs(i) for i in range(split_size))
     write_out_lines = _write_sums_to_memory(split_size, out_stride)
-    for line in multiply_acc_lines:
-        print(line)
+
     def insert_lines(lines):
         return ("\n" + " " * 10).join(lines)
 
@@ -245,41 +242,17 @@ def tensordot_int16_impl(
         __STATIC_FORCEINLINE __WEAK int {function_name}(
             int *output, int *tensor, int *kernel
         ) {{
-          int sum_0, sum_1 = 0;
+          {_init_accumulators(split_size)}
 
-          int tensor__y00_x00__y00_x01 = tensor[0];
-          int tensor__y00_x02__y00_x03 = tensor[1];
-          int tensor__y01_x00__y01_x01 = tensor[25];
-          int tensor__y01_x02__y01_x03 = tensor[26];
-          int tensor__y02_x00__y02_x01 = tensor[50];
-          int tensor__y02_x02__y02_x03 = tensor[51];
+          {insert_lines(load_tensor_lines)}
 
-          int kernel__y00_x00__y00_x01 = kernel[0];
-          int kernel__y01_x01__y01_x02 = kernel[2];
-          int kernel__y02_x02__unknown = kernel[4];
+          {insert_lines(load_kernel_lines)}
 
-          // Replace all calls to kernel[1] with this line to make the bug happen
-          //int kernel__y00_x02__y01_x00 = kernel[1];
+          {insert_lines(multiply_acc_lines)}
 
-          sum_0 = __builtin_arm_smlad(tensor__y00_x00__y00_x01, kernel__y00_x00__y00_x01, sum_0);
-          sum_0 = __builtin_arm_smlabb(tensor__y00_x02__y00_x03, kernel[1], sum_0);
-          sum_0 = __builtin_arm_smlatb(kernel[1], tensor__y01_x00__y01_x01, sum_0);
-          sum_0 = __builtin_arm_smlatb(tensor__y01_x00__y01_x01, kernel__y01_x01__y01_x02, sum_0);
-          sum_0 = __builtin_arm_smlatb(kernel__y01_x01__y01_x02, tensor__y01_x02__y01_x03, sum_0);
-          sum_0 = __builtin_arm_smlad(tensor__y02_x00__y02_x01, kernel[3], sum_0);
-          sum_0 = __builtin_arm_smlabb(tensor__y02_x02__y02_x03, kernel__y02_x02__unknown, sum_0);
-          sum_1 = __builtin_arm_smlatb(tensor__y00_x00__y00_x01, kernel__y00_x00__y00_x01, sum_1);
-          sum_1 = __builtin_arm_smlatb(kernel__y00_x00__y00_x01, tensor__y00_x02__y00_x03, sum_1);
-          sum_1 = __builtin_arm_smlatb(tensor__y00_x02__y00_x03, kernel[1], sum_1);
-          sum_1 = __builtin_arm_smlatt(tensor__y01_x00__y01_x01, kernel[1], sum_1);
-          sum_1 = __builtin_arm_smlad(tensor__y01_x02__y01_x03, kernel__y01_x01__y01_x02, sum_1);
-          sum_1 = __builtin_arm_smlatb(tensor__y02_x00__y02_x01, kernel[3], sum_1);
-          sum_1 = __builtin_arm_smlatb(kernel[3], tensor__y02_x02__y02_x03, sum_1);
-          sum_1 = __builtin_arm_smlatb(tensor__y02_x02__y02_x03, kernel__y02_x02__unknown, sum_1);
-
-          output[0] = sum_0;
-          output[1] = sum_1;
+          {insert_lines(write_out_lines)}
           return 0;
         }}
         """
     )
+

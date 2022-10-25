@@ -631,8 +631,6 @@ def compile_models(
     compiled_mods = list()
     for model in models:
         if schedule_name:
-            print("Running!")
-            print(schedule_name)
             # Testing with deterministic schedule
             task_list = autotvm.task.extract_from_program(
                 model.module, target=target, params=model.params
@@ -690,7 +688,6 @@ def compile_models(
                     compiled_mods.append(
                         AOTCompiledTestModel(model=model, executor_factory=executor_factory)
                     )
-    print(compiled_mods)
     return compiled_mods
 
 
@@ -739,7 +736,7 @@ def run_and_check(
             export_model_library_format(compiled_model.executor_factory, tar_file)
             t = tarfile.open(tar_file)
             t.extractall(base_path)
-            print(base_path)
+
             # Interface C APIs does not need compiler generated
             # workspace to generate the test application, because
             # workspace size is codegen'd as a macro to
@@ -813,27 +810,21 @@ def run_and_check(
             + custom_params
         )
 
-        print("About to check log output")
-
         compile_log_path = os.path.join(build_path, "test_compile.log")
         compile_command = f"{make_command} aot_test_runner"
-        if True:
+        if verbose:
             print("Compile command:\n", compile_command)
         _subprocess_check_log_output(compile_command, ".", compile_log_path)
-        print("Did compilation!")
+
         # Verify that runs fine
         run_log_path = os.path.join(build_path, "test_run.log")
         run_command = f"{make_command} run"
         if verbose:
             print("Run command:\n", run_command)
-        print(run_command)
-        while True:
-            pass
 
         # TODO(lhutton1) This is a quick and dirty work around to help temporarily reduce
         # the flakyness of the tests. Will remove once #10300 and #10314 are resolved.
         try:
-            print("Checking log output of command")
             _subprocess_check_log_output(run_command, build_path, run_log_path)
         except RuntimeError as err:
             print("Failed to run the module, having a second attempt...", file=sys.stderr)
@@ -897,7 +888,6 @@ def compile_and_run(
         schedule_name=schedule_name,
     )
 
-    print("Running and checking!")
     run_and_check(
         models=compiled_test_mods,
         runner=runner,
