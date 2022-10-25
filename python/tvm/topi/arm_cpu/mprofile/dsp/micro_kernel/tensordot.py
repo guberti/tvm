@@ -241,44 +241,23 @@ def tensordot_int16_impl(
     # __WEAK allows multiple copies of the function to overwrite themselves, saving flash
     return textwrap.dedent(
         f"""
-        #include <arm_nnsupportfunctions.h>
-        __STATIC_FORCEINLINE __WEAK int {function_name}(
+        int {function_name}(
             int *output, int *tensor, int *kernel
         ) {{
-          int sum_0, sum_1 = 0;
+          int sum_0;
 
-          int tensor__y00_x00__y00_x01 = tensor[0];
-          int tensor__y00_x02__y00_x03 = tensor[1];
-          int tensor__y01_x00__y01_x01 = tensor[25];
-          int tensor__y01_x02__y01_x03 = tensor[26];
-          int tensor__y02_x00__y02_x01 = tensor[50];
-          int tensor__y02_x02__y02_x03 = tensor[51];
+          int a = tensor[0];
+          int b = tensor[1];
 
-          int kernel__y00_x00__y00_x01 = kernel[0];
-          int kernel__y01_x01__y01_x02 = kernel[2];
-          int kernel__y02_x02__unknown = kernel[4];
+          int c = kernel[0];
 
           // Replace all calls to kernel[1] with this line to make the bug happen
-          //int kernel__y00_x02__y01_x00 = kernel[1];
+          int d = kernel[1];
 
-          sum_0 = __builtin_arm_smlad(tensor__y00_x00__y00_x01, kernel__y00_x00__y00_x01, sum_0);
-          sum_0 = __builtin_arm_smlabb(tensor__y00_x02__y00_x03, kernel[1], sum_0);
-          sum_0 = __builtin_arm_smlatb(kernel[1], tensor__y01_x00__y01_x01, sum_0);
-          sum_0 = __builtin_arm_smlatb(tensor__y01_x00__y01_x01, kernel__y01_x01__y01_x02, sum_0);
-          sum_0 = __builtin_arm_smlatb(kernel__y01_x01__y01_x02, tensor__y01_x02__y01_x03, sum_0);
-          sum_0 = __builtin_arm_smlad(tensor__y02_x00__y02_x01, kernel[3], sum_0);
-          sum_0 = __builtin_arm_smlabb(tensor__y02_x02__y02_x03, kernel__y02_x02__unknown, sum_0);
-          sum_1 = __builtin_arm_smlatb(tensor__y00_x00__y00_x01, kernel__y00_x00__y00_x01, sum_1);
-          sum_1 = __builtin_arm_smlatb(kernel__y00_x00__y00_x01, tensor__y00_x02__y00_x03, sum_1);
-          sum_1 = __builtin_arm_smlatb(tensor__y00_x02__y00_x03, kernel[1], sum_1);
-          sum_1 = __builtin_arm_smlatt(tensor__y01_x00__y01_x01, kernel[1], sum_1);
-          sum_1 = __builtin_arm_smlad(tensor__y01_x02__y01_x03, kernel__y01_x01__y01_x02, sum_1);
-          sum_1 = __builtin_arm_smlatb(tensor__y02_x00__y02_x01, kernel[3], sum_1);
-          sum_1 = __builtin_arm_smlatb(kernel[3], tensor__y02_x02__y02_x03, sum_1);
-          sum_1 = __builtin_arm_smlatb(tensor__y02_x02__y02_x03, kernel__y02_x02__unknown, sum_1);
+          sum_0 = __builtin_arm_smlad(a, c, sum_0);
+          sum_0 = b + d + sum_0;
 
           output[0] = sum_0;
-          output[1] = sum_1;
           return 0;
         }}
         """

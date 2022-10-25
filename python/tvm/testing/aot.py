@@ -827,8 +827,8 @@ def run_and_check(
         if verbose:
             print("Run command:\n", run_command)
         print(run_command)
-        while True:
-            pass
+        #while True:
+        #    pass
 
         # TODO(lhutton1) This is a quick and dirty work around to help temporarily reduce
         # the flakyness of the tests. Will remove once #10300 and #10314 are resolved.
