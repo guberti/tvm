@@ -195,8 +195,27 @@ def depthwise_conv2d_int16_tensordot_compute(
 
     batch_size, in_channels, data_h, data_w = data.shape
     _, c_mul, kernel_h, kernel_w = kernel.shape
-    output_channels = in_channels * c_mul
     assert kernel.shape[0] == in_channels
+
+    output_channels = in_channels * c_mul
+    words_per_channel = (kernel_h * kernel_w + 1) // 2
+
+    # Each out channel must start on a word boundry
+    word_aligned_kernel = te.compute(
+        (output_channels, words_per_channel, 2),
+        lambda c, w, h: tir.if_then_else(
+            2 * w + h < (kernel_h * kernel_w),
+            kernel[
+                indexdiv(c, c_mul),
+                indexmod(c, c_mul),
+                indexdiv(2 * w + h, kernel_w),
+                indexmod(2 * w + h, kernel_w)
+            ],
+            tir.const(0, "int8"),
+        ),
+        name="word_aligned_kernel",
+    )
+    print(word_aligned_kernel.shape)
 
     output_h = _compute_output_dim(data_h, kernel_h, pad_up, pad_down, stride_h)
     output_w = _compute_output_dim(data_w, kernel_w, pad_left, pad_right, stride_w)
@@ -205,7 +224,7 @@ def depthwise_conv2d_int16_tensordot_compute(
     kw_i = te.reduce_axis((0, kernel_w), name="kw_i")
 
     padded_data = _pad_if_needed(data, "NCHW", (pad_up, pad_left, pad_down, pad_right))
-    return _wrap_te_compute(
+    return te.compute(
         (batch_size, output_h, output_w, output_channels),
         lambda n, y, x, c: te.sum(
             padded_data[
@@ -214,10 +233,9 @@ def depthwise_conv2d_int16_tensordot_compute(
                 y * stride_h + kh_i,
                 x * stride_w + kw_i,
             ].astype(out_dtype)
-            * kernel[indexdiv(c, c_mul), indexmod(c, c_mul), kh_i, kw_i].astype(out_dtype),
+            * word_aligned_kernel[c, indexdiv(kh_i * kernel_w + kw_i, 2), indexmod(kh_i * kernel_w + kw_i, 2)].astype(out_dtype),
             axis=(kh_i, kw_i),
         ),
-        "NCHW",
         name="depthwise_conv2d",
         tag="depthwise_conv2d_int16_tensordot",
     )
@@ -239,26 +257,30 @@ def _make_intrin_func(func_name):
     return intrin_func
 
 
-def _make_depthwise_conv2d_tensorization(padded_data, kernel, split_size, x_strides, options):
+def _schedule_depthwise_conv2d(padded_data, kernel, split_size, x_strides, options):
     _, _, _, padded_w = get_const_tuple(padded_data.shape)
     _, _, kernel_h, kernel_w = get_const_tuple(kernel.shape)
+
     in_stride, _ = x_strides
-
-
     in_dtype = padded_data.dtype
     assert in_dtype == kernel.dtype
 
-    data_slice = te.placeholder((kernel_h, kernel_w + split_size - 1), name="a", dtype=in_dtype)
-    kernel_slice = te.placeholder((kernel_h, kernel_w), name="b", dtype=in_dtype)
+    total_usable_width = kernel_w + (split_size - 1) * in_stride
+    kernel_words = (kernel_h * kernel_w + 1) // 2
+
+    data_slice = te.placeholder((kernel_h, total_usable_width), name="a", dtype=in_dtype)
+    kernel_slice = te.placeholder((kernel_words, 2), name="b", dtype=in_dtype)
 
     kh_i = te.reduce_axis((0, kernel_h), name="kh_i")
     kw_i = te.reduce_axis((0, kernel_w), name="kw_i")
-    assert split_size == 2
     output_slice = te.compute(
         (split_size,),
         lambda k: te.sum(
-            data_slice[kh_i, k + kw_i].astype("int32") *
-            kernel_slice[kh_i, kw_i].astype("int32"),
+            data_slice[kh_i, k * in_stride + kw_i].astype("int32") *
+            kernel_slice[
+                indexdiv(kh_i * kernel_w + kw_i, 2),
+                indexmod(kh_i * kernel_w + kw_i, 2)
+            ].astype("int32"),
             axis=[kh_i, kw_i],
         ),
         name="c",
@@ -276,10 +298,10 @@ def _make_depthwise_conv2d_tensorization(padded_data, kernel, split_size, x_stri
         kernel_slice.dtype,
         name="kernel",
         offset_factor=1,
-        strides=[kernel_w, 1],
+        strides=[2, 1],
     )
     output_buf = tir.decl_buffer(
-        output_slice.shape, output_slice.dtype, name="output", offset_factor=1, strides=[1]
+        output_slice.shape, output_slice.dtype, name="output", offset_factor=1, strides=[8]
     )
 
     tensordot_params = (padded_w, (kernel_h, kernel_w), split_size, x_strides, options)
@@ -288,6 +310,8 @@ def _make_depthwise_conv2d_tensorization(padded_data, kernel, split_size, x_stri
         _make_intrin_func(get_c_function_name(*tensordot_params)),
         binds={data_slice: data_buf, kernel_slice: kernel_buf, output_slice: output_buf},
     )
+
+    print(intrin_tensordot.op.axis)
 
     tensordot_code = tensordot_int16_impl(*tensordot_params)
     return (intrin_tensordot, tensordot_code)
@@ -303,26 +327,26 @@ def tensordot_conv2ds_schedule(_cfg, outs):
         if "conv2d_int16" in operator.tag:
             output = operator.output(0)
             padded_data = output.op.input_tensors[0]
-            kernel = output.op.input_tensors[1]
+            word_aligned_kernel = output.op.input_tensors[1]
+            original_kernel = word_aligned_kernel.op.input_tensors[0]
 
-            if operator.tag == "conv2d_int16_tensordot":
-                b_ax, y_ax, x_ax, co_ax = schedule[output].op.axis
-                kh_ax, kw_ax, ci_ax = schedule[output].op.reduce_axis
-                schedule[output].reorder(b_ax, y_ax, x_ax, co_ax, kh_ax, kw_ax, ci_ax)
-                intrin, code = _make_conv2d_tensorization(padded_data, kernel)
+            workload = output.op.attrs["workload"]
+            _, in_stride = get_const_tuple(workload[3])
+            out_layout = workload[6]
 
-            elif operator.tag == "depthwise_conv2d_int16_tensordot":
-                b_ax, co_ax, y_ax, x_ax = schedule[output].op.axis
-                kh_ax, kw_ax = schedule[output].op.reduce_axis
-                xo_ax, xi_ax = schedule[output].split(x_ax, factor=2)
-                schedule[output].reorder(b_ax, co_ax, y_ax, xo_ax, xi_ax, kh_ax, kw_ax)
-                intrin, code = _make_depthwise_conv2d_tensorization(padded_data, kernel, 2, (1, 1), (True, False))
+            b_ax, y_ax, x_ax, co_ax = schedule[output].op.axis
+            out_stride = output.shape[3]
+            x_strides = (in_stride, out_stride)
 
-            else:
-                raise ValueError(f"Cannot tensorize {operator.tag} with tensordot!")
+            kh_ax, kw_ax = schedule[output].op.reduce_axis
+            xo_ax, xi_ax = schedule[output].split(x_ax, factor=2)
+            schedule[output].reorder(b_ax, co_ax, y_ax, xo_ax, xi_ax, kh_ax, kw_ax)
+            intrin, code = _schedule_depthwise_conv2d(padded_data, original_kernel, 2, x_strides, (True, False))
+
 
             schedule[output].tensorize(xi_ax, intrin)
-            schedule[output].pragma(b_ax, "import_c", code)
+            print("Passing")
+            #schedule[output].pragma(b_ax, "import_c", code)
 
     traverse_inline(schedule, outs[-1].op, _callback)
     return schedule
