@@ -176,7 +176,6 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
     inputs_ndarr = change_ndarray_layout(inputs_tensor, "NHWC", new_inputs_layout)
     kernel_ndarr = change_ndarray_layout(kernel_tensor, "OHWI", new_kernel_layout)
     output_ndarr = change_ndarray_layout(output_tensor, "NHWC", new_output_layout)
-    channel_axis_index = new_output_layout.index("C")
 
     """Construct our Relay function out of a qnn.conv2d, bias_add, and qnn.requantize. These will be
     fused into a single schedule by te_compiler_cache.cc."""
@@ -199,30 +198,28 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         channels=8,
         out_dtype="int32",
     )
-    print(convolution)
 
     biased_convolution = relay.op.nn.bias_add(
         convolution,
-        relay.const(biases_tensor, "int8"),
-        axis=channel_axis_index,
+        relay.const(biases_tensor, "int32"),
+        axis=3,
     )
 
     output = relay.qnn.op.requantize(
         biased_convolution,
         _get_quant_scale_const(biases_quant),
         _get_quant_zp_const(biases_quant),
-        _get_quant_scale_const(output_quant),
-        _get_quant_scale_const(output_quant),
-        axis=channel_axis_index,
-        rounding="int64",
-        out_dtype="int16",
+        _get_quant_scale_const(output_quant, as_scalar=True),
+        _get_quant_zp_const(output_quant, as_scalar=True),
+        axis=3,
+        out_dtype="int8",
     )
 
-    test_function = relay.Function([input_var], convolution)
+    test_function = relay.Function([input_var], output)
     test_model = AOTTestModel(
         module=tvm.IRModule.from_expr(test_function),
         inputs={"input": inputs_ndarr},
-        outputs=output_ndarr,
+        outputs={"Identity": output_ndarr},
     )
 
     compile_and_run(

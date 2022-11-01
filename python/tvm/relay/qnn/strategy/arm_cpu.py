@@ -25,7 +25,6 @@ from ...op.strategy.generic import is_depthwise_conv2d
 @qnn_conv2d_strategy.register("arm_cpu")
 def qnn_conv2d_strategy_arm_cpu(attrs, inputs, out_type, target):
     """qnn.conv2d strategy for Arm CPU"""
-    assert False
     data = inputs[0]
     kernel = inputs[1]
     data_layout = attrs.data_layout
