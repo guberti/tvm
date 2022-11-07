@@ -154,7 +154,6 @@ def _get_quant_zp_const(quantization_dict, as_scalar = False):
 def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
     in_dtype = "int8"
     schedule_name, dtype, padding, strides = _get_layer_attributes(layer)
-
     """Load the input, kernel, bias, and generated output from each layer when it was run by the
     TensorFlow TFLite interpreter. The tensor values are quantized (though note that biases_tensor
     is an int32), while the quantization data is not. Note the zero points are zero everywhere
@@ -163,10 +162,13 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
     def lookup(detail):
         return interpreter.get_tensor(detail["index"]), detail["quantization_parameters"]
     inputs_tensor, inputs_quant = lookup(_get_main_path_tensor_details(tensor_details, layer))
+    print(inputs_tensor.shape)
     kernel_tensor, kernel_quant = lookup(_get_kernel_details(tensor_details, layer))
+    print(kernel_tensor.shape)
     biases_tensor, biases_quant = lookup(_get_bias_details(tensor_details, layer))
+    print(biases_tensor.shape)
     output_tensor, output_quant = lookup(_get_main_path_tensor_details(tensor_details, layer + 1))
-
+    out_channel_multiplier, kernel_h, kernel_w, in_channels = kernel_tensor.shape
 
     # Reshape tensors to match the layouts we will see after legalization
     if layer % 2 == 0: # Regular conv2d
@@ -187,15 +189,15 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         kernel_zero_point=_get_quant_zp_const(kernel_quant),
         input_scale=_get_quant_scale_const(inputs_quant, as_scalar=True),
         kernel_scale=_get_quant_scale_const(kernel_quant),
-        kernel_size=(3, 3),
+        kernel_size=(kernel_h, kernel_w),
         data_layout=new_inputs_layout,
         kernel_layout=new_kernel_layout,
 
         dilation=(1, 1),
         strides=strides,
         padding=padding,
-        groups=(1 if layer % 2 == 0 else 3),
-        channels=8,
+        groups=(1 if layer % 2 == 0 else in_channels),
+        channels=(out_channel_multiplier if layer % 2 == 0 else in_channels),
         out_dtype="int32",
     )
 
@@ -219,7 +221,7 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
     test_model = AOTTestModel(
         module=tvm.IRModule.from_expr(test_function),
         inputs={"input": inputs_ndarr},
-        outputs={"Identity": output_ndarr},
+        outputs={"output": output_ndarr},
     )
 
     compile_and_run(
@@ -229,7 +231,7 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         use_unpacked_api=True,
         target_opts={
             "-keys": "arm_cpu",
-            "-mcpu": "cortex-m4",
+            "-mcpu": "cortex-m7",
         },
         schedule_name=schedule_name,
         verbose=True,
