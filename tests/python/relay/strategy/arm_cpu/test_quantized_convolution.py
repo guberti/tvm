@@ -27,7 +27,8 @@ import tensorflow as tf
 import tvm
 import tvm.testing
 from tvm import relay
-from tvm.testing.aot import AOTTestModel, compile_and_run, generate_ref_data
+from tvm.testing.aot import AOTTestModel, run_and_check, AOTCompiledTestModel
+from tvm.relay.backend import Executor, Runtime
 from tvm.micro.testing.aot_test_utils import AOT_CORSTONE300_RUNNER
 from tvm.contrib.download import download_testdata
 from test_generalized_conv2d import change_ndarray_layout
@@ -69,13 +70,13 @@ def _get_layer_attributes(layer_num):
     ourselves. This function is a bit of a hack, but lets us skip that."""
 
     if layer_num == 0: # Regular conv2d
-        return ("todo_schedule_name", "int8", (1, 1, 0, 0), (2, 2))
+        return (None, "int8", (1, 1, 0, 0), (2, 2))
     elif layer_num % 2 == 0: # 1x1 conv2d
-        return ("todo_schedule_name", "int8", (1, 1, 1, 1), (1, 1))
+        return (None, "int8", (1, 1, 1, 1), (1, 1))
     elif layer_num in [3, 7, 11, 23]: # Downsizing depthwise_conv2d layers
-        return ("todo_schedule_name", "int8", (1, 1, 0, 0), (2, 2))
+        return (None, "int8", (1, 1, 0, 0), (2, 2))
     else: # Depthwise conv2d
-        return ("todo_schedule_name", "int8", (1, 1, 1, 1), (1, 1))
+        return (None, "int8", (1, 1, 1, 1), (1, 1))
 
 
 def _get_relu_activation_prefix(layer_num):
@@ -149,7 +150,7 @@ def _get_quant_zp_const(quantization_dict, as_scalar = False):
 
 
 
-@pytest.mark.parametrize("layer", range(1))
+@pytest.mark.parametrize("layer", range(2, 3))
 @tvm.testing.requires_corstone300
 def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
     in_dtype = "int8"
@@ -162,11 +163,8 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
     def lookup(detail):
         return interpreter.get_tensor(detail["index"]), detail["quantization_parameters"]
     inputs_tensor, inputs_quant = lookup(_get_main_path_tensor_details(tensor_details, layer))
-    print(inputs_tensor.shape)
     kernel_tensor, kernel_quant = lookup(_get_kernel_details(tensor_details, layer))
-    print(kernel_tensor.shape)
     biases_tensor, biases_quant = lookup(_get_bias_details(tensor_details, layer))
-    print(biases_tensor.shape)
     output_tensor, output_quant = lookup(_get_main_path_tensor_details(tensor_details, layer + 1))
     out_channel_multiplier, kernel_h, kernel_w, in_channels = kernel_tensor.shape
 
@@ -224,15 +222,37 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         outputs={"output": output_ndarr},
     )
 
-    compile_and_run(
-        test_model,
+    target = tvm.target.Target("c -keys=arm_cpu -mcpu=cortex-m7")
+    runtime = Runtime("crt")
+    executor = Executor(
+        "aot",
+        {
+            "workspace-byte-alignment": 8,
+            "constant-byte-alignment": 8,
+            "interface-api": "c",
+            "unpacked-api": True,
+        },
+    )
+
+    with tvm.transform.PassContext(
+        opt_level=3,
+        config={"tir.disable_vectorize": True},
+        disabled_pass=["qnn.Legalize"]
+    ):
+        executor_factory = tvm.relay.build(
+            test_model.module,
+            target,
+            executor=executor,
+            runtime=runtime,
+            params=test_model.params,
+            mod_name=test_model.name,
+        )
+        compiled = AOTCompiledTestModel(model=test_model, executor_factory=executor_factory)
+
+    run_and_check(
+        models=[compiled],
         runner=AOT_CORSTONE300_RUNNER,
         interface_api="c",
-        use_unpacked_api=True,
-        target_opts={
-            "-keys": "arm_cpu",
-            "-mcpu": "cortex-m7",
-        },
-        schedule_name=schedule_name,
-        verbose=True,
+        workspace_byte_alignment=8,
+        constant_byte_alignment=8,
     )
