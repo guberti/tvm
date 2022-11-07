@@ -28,15 +28,14 @@ import numpy as np
 from tvm import te, tir
 
 
-def get_c_function_name(split_size, dimensions, offsets, x_strides, options):
+def get_c_function_name(split_size, dimensions, offsets, x_strides):
     """Gets the C function name of the tensordot function."""
     tensor_w, kernel_h, kernel_w = dimensions
     return (
         f"tensordot_opt_x{split_size}_int16_w{tensor_w}_"
-        + f"{kernel_dims[0]}x{kernel_dims[1]}_"
-        + "".join(map(str, offsets)) + "_"
+        + f"{kernel_h}x{kernel_w}_"
+        + "".join(map(str, offsets))
         + (f"_{x_strides[0]}_{x_strides[1]}" if split_size > 1 else "")
-        + ("_dsp" if options[0] else "")
     )
 
 def _is_pow_2(number):
@@ -100,7 +99,7 @@ def _load_tensor_vars(halfwords, tensor_w) -> Iterator[str]:
     assert len(halfwords) % 2 == 0
     for i in range(0, len(halfwords), 2):
         var_name = "__".join(map(_get_int16_alias, halfwords[i : i + 2]))
-        y, x = halfwords[i] or halfwords[i + 1]
+        y, x = halfwords[i + 1] or halfwords[i]
         tensor_index = (y * tensor_w + x) // 2
         yield f"int tensor__{var_name} = tensor[{tensor_index}];"
 
@@ -217,18 +216,19 @@ def _requantize_sums(num_sums) -> Iterator[str]:
 
     It's also worth noting the SSAT16 operation doesn't help us here. The data isn't stored as two
     halfwords in a word, and rearrainging it would take at least one cycle. Two SSAT operations is
-    just as good."""
+    just as good.
+
+    Lastly, calling __builtin_arm_ssat is a little bit gross, but GCC and Clang are unreliable about
+    compiling other ways of writing this. Both the multiply + shift and shift + saturation combine
+    to one instruction each."""
 
     yield "int requantize_multiplier = *requant_scale;"
     for i in range(num_sums):
-        yield f"int requant_{i} = (sum_i * (long) requantize_multiplier) >> 32;"
-        yield f"requant_{i} >>= 8;"
-        # These lines compile to one instruction
-        yield f"requant_{i} = (sum_{i} > -128) ? sum_{i} : -128;"
-        yield f"requant_{i} = (sum_{i} > 127) ? sum_{i} : 127;"
+        yield f"int requant_{i} = (sum_{i} * (long long) requantize_multiplier) >> 32;"
+        yield f"requant_{i} = __builtin_arm_ssat(requant_{i} >> 8, 8);"
 
 
-def _write_out_sums(num_sums, offset, stride) -> Iterator[str]:
+def _write_sums_to_memory(num_sums, offset, stride) -> Iterator[str]:
     """Writes the requantized sums to memory. Note - halfword packing here *does* help. It seems
     like it wouldn't, as doing two pipelined int16 stores takes two cycles - the same as halfword
     packing plus a pipelined int32 store. We still do the int16 stores when there is an output
@@ -239,22 +239,22 @@ def _write_out_sums(num_sums, offset, stride) -> Iterator[str]:
 
     if stride > 1:
         for i in range(num_sums):
-            yield f"((*short) output)[{i * stride + offset}] = (short) requant_{i};"
+            yield f"((short*) output)[{i * stride + offset}] = (short) requant_{i};"
 
     else:
         num_halfwords = (num_sums - offset) // 2
         for i in range(num_halfwords):
             index = 2 * i + offset
-            yield f"int packed_res_{i} = __builtin_arm_pkhtb(requant_{index + 1}, requant_{index});"
+            yield f"int packed_res_{i} = requant_{index} + (requant_{index + 1} << 16);"
 
         if offset == 1:
-            yield f"((*short) output)[1] = (short) requant_0;"
+            yield f"((short*) output)[1] = (short) requant_0;"
 
         for i in range(num_halfwords):
             yield f"output[{offset + i}] = packed_res_{i};"
 
         if (offset + num_sums) % 2 == 1:
-            yield f"((*short) output)[{num_sums * 2}] = (short) requant_{num_sums * 2};"
+            yield f"((short*) output)[{num_halfwords * 2}] = (short) requant_{num_halfwords * 2};"
 
 
 def tensordot_int16_impl(
@@ -262,18 +262,16 @@ def tensordot_int16_impl(
     dimensions: Tuple[int, int, int],
     offsets: Tuple[int, int, int],
     x_strides: Tuple[int, int],
-    options: Tuple[bool],
 ) -> str:
     """Code for a specialized version of tensordot, which computes `split_size` tensordot operations
     at the same time. Only works with `int16`. The generated function takes as input pointers to the
     output, tensor, and kernel, which must be word-aligned. However, the stride can be half a word.
     """
-    function_name = get_c_function_name(split_size, dimensions, offsets, x_strides, options)
+    function_name = get_c_function_name(split_size, dimensions, offsets, x_strides)
     tensor_w, kernel_h, kernel_w = dimensions
     tensor_offset, kernel_offset, output_offset = offsets
     assert tensor_offset < 2 and kernel_offset < 2 and output_offset < 2
     in_stride, out_stride = x_strides
-    has_dsp, = options
 
     tensor_halfwords = list(_get_tensor_halfwords(dimensions, tensor_offset, split_size, in_stride))
     kernel_halfwords = list(_get_kernel_halfwords(dimensions, kernel_offset))
@@ -284,14 +282,12 @@ def tensordot_int16_impl(
         draft_macs_iter = _get_draft_macs(
             (kernel_h, kernel_w), tensor_halfwords, kernel_halfwords, index * in_stride
         )
-        if has_dsp:
-            draft_macs_iter = _apply_simd_optimizations(draft_macs_iter)
-
+        draft_macs_iter = _apply_simd_optimizations(draft_macs_iter)
         return _expand_instruction_tuples(draft_macs_iter, index)
 
     multiply_acc_lines = chain.from_iterable(gen_single_loop_macs(i) for i in range(split_size))
-    requantize_lines = _requantize_sums(num_sums)
-    write_out_lines = _write_sums_to_memory(split_size, out_offset, out_stride)
+    requantize_lines = _requantize_sums(split_size)
+    write_out_lines = _write_sums_to_memory(split_size, output_offset, out_stride)
 
     def insert_lines(lines):
         return ("\n" + " " * 10).join(lines)
@@ -301,7 +297,7 @@ def tensordot_int16_impl(
         f"""
         #include <arm_nnsupportfunctions.h>
         __STATIC_FORCEINLINE __WEAK int {function_name}(
-            int *output, int *tensor, int *kernel, int *bias, int *requant_scale,
+            int *output, int *tensor, int *kernel, int *bias, int *requant_scale
         ) {{
           {_init_biased_accumulators(split_size)}
 
