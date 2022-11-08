@@ -26,7 +26,7 @@ import tensorflow as tf
 
 import tvm
 import tvm.testing
-from tvm import relay
+from tvm import meta_schedule, relay
 from tvm.testing.aot import AOTTestModel, run_and_check, AOTCompiledTestModel
 from tvm.relay.backend import Executor, Runtime
 from tvm.micro.testing.aot_test_utils import AOT_CORSTONE300_RUNNER
@@ -170,9 +170,9 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
 
     # Reshape tensors to match the layouts we will see after legalization
     if layer % 2 == 0: # Regular conv2d
-        new_inputs_layout, new_kernel_layout, new_output_layout = "NHWC", "OHWI", "NCHW"
+        new_inputs_layout, new_kernel_layout, new_output_layout = "NHWC", "OHWI", "NHWC"
     else: # Depthwise conv2d
-        new_inputs_layout, new_kernel_layout, new_output_layout = "NCHW", "OIHW", "NHWC"
+        new_inputs_layout, new_kernel_layout, new_output_layout = "NCHW", "OIHW", "NCHW"
     inputs_ndarr = change_ndarray_layout(inputs_tensor, "NHWC", new_inputs_layout)
     kernel_ndarr = change_ndarray_layout(kernel_tensor, "OHWI", new_kernel_layout)
     output_ndarr = change_ndarray_layout(output_tensor, "NHWC", new_output_layout)
@@ -212,6 +212,7 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         _get_quant_scale_const(output_quant, as_scalar=True),
         _get_quant_zp_const(output_quant, as_scalar=True),
         axis=3,
+        compute_dtype="int64",
         out_dtype="int8",
     )
 
@@ -221,6 +222,7 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         inputs={"input": inputs_ndarr},
         outputs={"output": output_ndarr},
     )
+    print(test_model.params)
 
     target = tvm.target.Target("c -keys=arm_cpu -mcpu=cortex-m7")
     runtime = Runtime("crt")
@@ -234,11 +236,27 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         },
     )
 
+
+    # There should only be one operator
+    def schedule_fn(sch):
+        print(sch.mod.attrs["task_name"])
+        assert "fused_qnn_conv2d_add_qnn_requantize" in sch.mod.attrs["task_name"]
+        tvm.topi.arm_cpu.schedule_qnn_conv2d(sch)
+        #import pdb
+        #pdb.set_trace()
+
+        return True
+
+
     with tvm.transform.PassContext(
         opt_level=3,
-        config={"tir.disable_vectorize": True},
+        config={
+            "tir.disable_vectorize": True,
+            "relay.backend.use_meta_schedule": True,
+            "relay.backend.tir_converter": "allow_extern",
+        },
         disabled_pass=["qnn.Legalize"]
-    ):
+    ), meta_schedule.database.ScheduleFnDatabase(schedule_fn):
         executor_factory = tvm.relay.build(
             test_model.module,
             target,
