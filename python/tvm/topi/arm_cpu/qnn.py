@@ -122,41 +122,57 @@ def qnn_conv2d(  # Conv2d inputs
     )
 
 
-    assert odtype == "int8"
+    assert odtype == "int16"
     @T.prim_func
     def biased_quantized_conv2d(data_handle: T.handle, kernel_handle: T.handle, bias_handle: T.handle, output_handle: T.handle) -> None:
         T.func_attr({"global_symbol": "main", "tir.noalias": True})
-        DATA = T.match_buffer(data_handle, data.shape, dtype="int8")
-        KERNEL = T.match_buffer(kernel_handle, weight.shape, dtype="int8")
+        DATA = T.match_buffer(data_handle, data.shape, dtype="int16")
+        KERNEL = T.match_buffer(kernel_handle, weight.shape, dtype="int16")
         BIAS = T.match_buffer(bias_handle, bias.shape, dtype="int32")
         OUTPUT = T.match_buffer(output_handle, oshape, dtype=odtype)
 
-        for n, oh, ow, oc in T.grid(1, 48, 48, 16):
+        foobar = DATA[0, 0, 0, 0]
+        barfuk = KERNEL[0, 0, 0, 0]
+        for oh, ow, oc in T.grid(48, 48, 16):
             with T.block("conv2d"):
-                SUM = T.alloc_buffer((1,), dtype="int32")
-                SUM[0] = BIAS[n, 0, 0, oc]
-                #OUTPUT[n, oh, ow, oc] = T.int8(0)
-                for ic in T.grid(8):
-                    SUM[0] += DATA[n, oh, ow, ic].astype("int32") * KERNEL[oc, 0, 0, ic].astype("int32")
+                voh, vow, voc = T.axis.remap("SSS", [oh, ow, oc])
+                OUTPUT[0, voh, vow, voc] = T.call_extern(
+                    get_c_function_name(1, (384, 1, 8), (0, 0, 0), (8, 1)),
+                    T.tvm_access_ptr(
+                        T.type_annotation(dtype="int16"),
+                        DATA.data,
+                        voh * 48 * 16 + vow * 16,
+                        16,
+                        1,
+                        dtype="handle",
+                    ),
+                    T.tvm_access_ptr(
+                        T.type_annotation(dtype="int16"),
+                        KERNEL.data,
+                        voc * 16,
+                        16,
+                        1,
+                        dtype="handle",
+                    ),
+                    BIAS[voc, 0, 0, 0],
+                    dtype="int16"
+                )
 
-            #T.evaluate(T.call_extern("tvmgen_default_fused_nn_max_pool2d_cast", "foobar", dtype="int32"))
 
-            OUTPUT[n, oh, ow, oc] = SUM[0].astype("int8")
-
-
-    output = te.extern_primfunc([data, weight, bias], biased_quantized_conv2d, name="tir", dtype="int8")
+    output = te.extern_primfunc([data, weight, bias], biased_quantized_conv2d, name="tir", dtype="int16")
     return output
 
 
 def schedule_qnn_conv2d(sch):
     conv2d_block = sch.get_block("conv2d")
-    n_loop, h_loop, w_loop, oc_loop = sch.get_loops(conv2d_block)
+    h_loop, w_loop, oc_loop = sch.get_loops(conv2d_block)
+    sch.reorder(oc_loop, h_loop, w_loop)
     sch.split(oc_loop, factors=(None, 2))
     sch.annotate(
         block_or_loop=conv2d_block,
         ann_key="pragma_import_c",
         ann_val=tensordot_int16_impl(
-            4, (48 * 8, 1, 8), (0, 0, 0), (8, 1)
+            1, (384, 1, 8), (0, 0, 0), (8, 1)
         )
     )
 

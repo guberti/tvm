@@ -23,6 +23,7 @@ import numpy as np
 from PIL import Image
 import pytest
 import tensorflow as tf
+import time
 
 import tvm
 import tvm.testing
@@ -70,13 +71,13 @@ def _get_layer_attributes(layer_num):
     ourselves. This function is a bit of a hack, but lets us skip that."""
 
     if layer_num == 0: # Regular conv2d
-        return (None, "int8", (1, 1, 0, 0), (2, 2))
+        return (None, "int16", (1, 1, 0, 0), (2, 2))
     elif layer_num % 2 == 0: # 1x1 conv2d
-        return (None, "int8", (1, 1, 1, 1), (1, 1))
+        return (None, "int16", (1, 1, 1, 1), (1, 1))
     elif layer_num in [3, 7, 11, 23]: # Downsizing depthwise_conv2d layers
-        return (None, "int8", (1, 1, 0, 0), (2, 2))
+        return (None, "int16", (1, 1, 0, 0), (2, 2))
     else: # Depthwise conv2d
-        return (None, "int8", (1, 1, 1, 1), (1, 1))
+        return (None, "int16", (1, 1, 1, 1), (1, 1))
 
 
 def _get_relu_activation_prefix(layer_num):
@@ -153,7 +154,6 @@ def _get_quant_zp_const(quantization_dict, as_scalar = False):
 @pytest.mark.parametrize("layer", range(2, 3))
 @tvm.testing.requires_corstone300
 def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
-    in_dtype = "int8"
     schedule_name, dtype, padding, strides = _get_layer_attributes(layer)
     """Load the input, kernel, bias, and generated output from each layer when it was run by the
     TensorFlow TFLite interpreter. The tensor values are quantized (though note that biases_tensor
@@ -173,16 +173,16 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         new_inputs_layout, new_kernel_layout, new_output_layout = "NHWC", "OHWI", "NHWC"
     else: # Depthwise conv2d
         new_inputs_layout, new_kernel_layout, new_output_layout = "NCHW", "OIHW", "NCHW"
-    inputs_ndarr = change_ndarray_layout(inputs_tensor, "NHWC", new_inputs_layout)
-    kernel_ndarr = change_ndarray_layout(kernel_tensor, "OHWI", new_kernel_layout)
-    output_ndarr = change_ndarray_layout(output_tensor, "NHWC", new_output_layout)
+    inputs_ndarr = change_ndarray_layout(inputs_tensor, "NHWC", new_inputs_layout).astype(dtype)
+    kernel_ndarr = change_ndarray_layout(kernel_tensor, "OHWI", new_kernel_layout).astype(dtype)
+    output_ndarr = change_ndarray_layout(output_tensor, "NHWC", new_output_layout).astype(dtype)
 
     """Construct our Relay function out of a qnn.conv2d, bias_add, and qnn.requantize. These will be
     fused into a single schedule by te_compiler_cache.cc."""
-    input_var = relay.var("input", relay.TensorType(inputs_ndarr.shape, in_dtype))
+    input_var = relay.var("input", relay.TensorType(inputs_ndarr.shape, dtype))
     convolution = relay.qnn.op.conv2d(
         input_var,
-        relay.const(kernel_ndarr, "int8"),
+        relay.const(kernel_ndarr, dtype),
         input_zero_point=_get_quant_zp_const(inputs_quant, as_scalar=True),
         kernel_zero_point=_get_quant_zp_const(kernel_quant),
         input_scale=_get_quant_scale_const(inputs_quant, as_scalar=True),
@@ -213,7 +213,7 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         _get_quant_zp_const(output_quant, as_scalar=True),
         axis=3,
         compute_dtype="int64",
-        out_dtype="int8",
+        out_dtype=dtype,
     )
 
     test_function = relay.Function([input_var], output)
