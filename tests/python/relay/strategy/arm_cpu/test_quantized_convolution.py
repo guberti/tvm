@@ -33,6 +33,7 @@ from tvm.relay.backend import Executor, Runtime
 from tvm.micro.testing.aot_test_utils import AOT_CORSTONE300_RUNNER
 from tvm.contrib.download import download_testdata
 from test_generalized_conv2d import change_ndarray_layout
+from tvm.relay.testing.temp_op_attr import TempOpAttr
 
 MODEL_URL = "https://github.com/mlcommons/tiny/raw/master/benchmark/training/visual_wake_words/trained_models/vww_96_int8.tflite"
 SAMPLE_URL = "https://github.com/dmlc/web-data/raw/main/tensorflow/models/InceptionV1/elephant-299.jpg"
@@ -197,6 +198,7 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         groups=(1 if layer % 2 == 0 else in_channels),
         channels=(out_channel_multiplier if layer % 2 == 0 else in_channels),
         out_dtype="int32",
+        out_layout=new_output_layout
     )
 
     biased_convolution = relay.op.nn.bias_add(
@@ -221,6 +223,7 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         module=tvm.IRModule.from_expr(test_function),
         inputs={"input": inputs_ndarr},
         outputs={"output": output_ndarr},
+        output_tolerance=2,
     )
     print(test_model.params)
 
@@ -242,30 +245,37 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         print(sch.mod.attrs["task_name"])
         assert "fused_qnn_conv2d_add_qnn_requantize" in sch.mod.attrs["task_name"]
         tvm.topi.arm_cpu.schedule_qnn_conv2d(sch)
-        #import pdb
-        #pdb.set_trace()
 
         return True
 
+    # Alter to be an int16 layout
+    def alter_layout(attrs, inputs, tinfos, out_type):
+        _prev_ops, in_scale, _in_zp, out_scale, _out_zp = inputs
+        in_scale_numpy = in_scale.data.numpy().astype("float64")
+        out_scale_scalar = out_scale.data.numpy().item()
+        scales = (in_scale_numpy / out_scale_scalar) * 2**32
+        scale_constant = relay.Constant(tvm.nd.array(scales.astype("int32")))
+        return relay.qnn.op.requantize(inputs[0], scale_constant, *inputs[2:], **attrs)
 
-    with tvm.transform.PassContext(
-        opt_level=3,
-        config={
-            "tir.disable_vectorize": True,
-            "relay.backend.use_meta_schedule": True,
-            "relay.backend.tir_converter": "allow_extern",
-        },
-        disabled_pass=["qnn.Legalize"]
-    ), meta_schedule.database.ScheduleFnDatabase(schedule_fn):
-        executor_factory = tvm.relay.build(
-            test_model.module,
-            target,
-            executor=executor,
-            runtime=runtime,
-            params=test_model.params,
-            mod_name=test_model.name,
-        )
-        compiled = AOTCompiledTestModel(model=test_model, executor_factory=executor_factory)
+    with TempOpAttr("qnn.requantize", "FTVMAlterOpLayout", alter_layout):
+        with tvm.transform.PassContext(
+            opt_level=3,
+            config={
+                "tir.disable_vectorize": True,
+                "relay.backend.use_meta_schedule": True,
+                "relay.backend.tir_converter": "allow_extern",
+            },
+            disabled_pass=["qnn.Legalize"]
+        ), meta_schedule.database.ScheduleFnDatabase(schedule_fn):
+            executor_factory = tvm.relay.build(
+                test_model.module,
+                target,
+                executor=executor,
+                runtime=runtime,
+                params=test_model.params,
+                mod_name=test_model.name,
+            )
+            compiled = AOTCompiledTestModel(model=test_model, executor_factory=executor_factory)
 
     run_and_check(
         models=[compiled],

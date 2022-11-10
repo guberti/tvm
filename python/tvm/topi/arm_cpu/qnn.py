@@ -81,67 +81,54 @@ def qnn_requantize(data, input_scale, input_zp, output_scale, axis, out_dtype):
     return te.compute(data.shape, _compute)
 
 
-def qnn_conv2d(  # Conv2d inputs
-    data,
-    weight,
-    # Conv2d quantization params:
-    input_zero_point,
-    kernel_zero_point,
-    _input_scale,
-    _kernel_scale,
-    # bias
-    bias,
-    # Requantization params:
-    rq_input_scale,
-    rq_input_zero_point,
-    rq_output_scale,
-    rq_output_zero_point,
-    # Conv2d attributes:
-    strides,
-    padding,
-    dilation,
-    oshape,
-    odtype,
-):
+
+def qnn_conv2d(attrs, inputs, out_type):
     """Compute for qnn.conv2d with NHWC layout. Note that this is a DIFFERENT layout from the
     Hexagon variant, because they have special instructions Cortex-M doesn't have. We also expect
     the kernel to have OHWI layout.
     """
-    in_channel = data.shape[3]  # NHWC layout
-    kernel_height = weight.shape[1]  # OHWI layout
-    kernel_width = weight.shape[2]  # OHWI layout
+    assert len(inputs) == 11
+    data, weight, _izp, _kzp, _iscale, _kscale, bias, rq_scale = inputs[0:8]
+    data_layout = attrs.data_layout
+    kernel_layout = attrs.kernel_layout
+    output_layout = attrs.out_layout
+    assert output_layout == "NHWC"
 
-    height_stride, width_stride = strides
-    dilation_h, dilation_w = dilation
-
-    dilated_kernel_h = (kernel_height - 1) * dilation_h + 1
-    dilated_kernel_w = (kernel_width - 1) * dilation_w + 1
-
-    pad_top, pad_left, pad_down, pad_right = get_pad_tuple(
-        get_const_tuple(padding), (dilated_kernel_h, dilated_kernel_w)
-    )
-
-
-    assert odtype == "int16"
+    #assert rq_input_scale.dtype == "int32"
+    assert rq_scale.shape[0] == 16
+    assert len(rq_scale.shape) == 1
     @T.prim_func
-    def biased_quantized_conv2d(data_handle: T.handle, kernel_handle: T.handle, bias_handle: T.handle, output_handle: T.handle) -> None:
+    def biased_quantized_conv2d(data_handle: T.handle, kernel_handle: T.handle, bias_handle: T.handle, requantize_handle: T.handle, output_handle: T.handle) -> None:
         T.func_attr({"global_symbol": "main", "tir.noalias": True})
         DATA = T.match_buffer(data_handle, data.shape, dtype="int16")
         KERNEL = T.match_buffer(kernel_handle, weight.shape, dtype="int16")
         BIAS = T.match_buffer(bias_handle, bias.shape, dtype="int32")
-        OUTPUT = T.match_buffer(output_handle, oshape, dtype=odtype)
+        REQUANTIZE_SCALE = T.match_buffer(requantize_handle, rq_scale.shape, dtype="int32")
+        OUTPUT = T.match_buffer(output_handle, out_type.shape, dtype=out_type.dtype)
 
-        foobar = DATA[0, 0, 0, 0]
-        barfuk = KERNEL[0, 0, 0, 0]
-        for oh, ow, oc in T.grid(48, 48, 16):
+        OUTPUT[0, 0, 0, 0] = 0
+        x = DATA[0, 0, 0, 0]
+        y = KERNEL[0, 0, 0, 0]
+        for oh, ow, oc in T.grid(48, 24, 16):
             with T.block("conv2d"):
                 voh, vow, voc = T.axis.remap("SSS", [oh, ow, oc])
-                OUTPUT[0, voh, vow, voc] = T.call_extern(
-                    get_c_function_name(1, (384, 1, 8), (0, 0, 0), (8, 1)),
+                #T.reads([DATA[0, oh, ow : ow + 1, 0:8], KERNEL[oc, 0:1, 0:1, 0:8]])
+                #T.writes([OUTPUT[0, oh, ow, oc], OUTPUT[0, oh, ow, oc + 1]])
+
+                T.evaluate(T.call_extern(
+                    get_c_function_name(2, (384, 1, 8), (0, 0, 0), (8, 1)),
+                    T.tvm_access_ptr(
+                        T.type_annotation(dtype="int16"),
+                        OUTPUT.data,
+                        voh * 48 * 16 + vow * 16 + voc,
+                        16,
+                        1,
+                        dtype="handle",
+                    ),
                     T.tvm_access_ptr(
                         T.type_annotation(dtype="int16"),
                         DATA.data,
-                        voh * 48 * 16 + vow * 16,
+                        voh * 48 * 8 + vow * 8,
                         16,
                         1,
                         dtype="handle",
@@ -155,12 +142,13 @@ def qnn_conv2d(  # Conv2d inputs
                         dtype="handle",
                     ),
                     BIAS[voc, 0, 0, 0],
+                    REQUANTIZE_SCALE[voc],
                     dtype="int16"
-                )
+                ))
 
 
-    output = te.extern_primfunc([data, weight, bias], biased_quantized_conv2d, name="tir", dtype="int16")
-    return output
+    output = te.extern_primfunc([data, weight, bias, rq_scale], biased_quantized_conv2d, name="tir", dtype="int16")
+    return [output]
 
 
 def schedule_qnn_conv2d(sch):
@@ -172,7 +160,7 @@ def schedule_qnn_conv2d(sch):
         block_or_loop=conv2d_block,
         ann_key="pragma_import_c",
         ann_val=tensordot_int16_impl(
-            1, (384, 1, 8), (0, 0, 0), (8, 1)
+            2, (384, 1, 8), (0, 0, 0), (8, 1)
         )
     )
 

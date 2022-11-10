@@ -62,7 +62,7 @@ def _init_biased_accumulators(split_size):
     to do a stack push/pop, so we'll do it first."""
     var_names = map(lambda x: f"sum_{x:x}", range(split_size))
     joined_var_names = ", ".join(var_names)
-    return f"int {joined_var_names} = *bias;"
+    return f"int {joined_var_names} = bias;"
 
 
 def _get_tensor_halfwords(dimensions, offset, split_size, in_stride) -> Iterator:
@@ -224,10 +224,9 @@ def _requantize_sums(num_sums) -> Iterator[str]:
     compiling other ways of writing this. Both the multiply + shift and shift + saturation combine
     to one instruction each."""
 
-    yield "int requantize_multiplier = *requant_scale;"
     for i in range(num_sums):
-        yield f"int requant_{i} = (sum_{i} * (long long) requantize_multiplier) >> 32;"
-        yield f"requant_{i} = __builtin_arm_ssat(requant_{i} >> 8, 8);"
+        yield f"int requant_{i} = (sum_{i} * (long long) requant_scale) >> 32;"
+        yield f"requant_{i} = __builtin_arm_ssat(requant_{i}, 8);"
 
 
 def _write_sums_to_memory(num_sums, offset, stride) -> Iterator[str]:
@@ -299,7 +298,7 @@ def tensordot_int16_impl(
         f"""
         #include <arm_nnsupportfunctions.h>
         __STATIC_FORCEINLINE __WEAK int {function_name}(
-            int *output, int *tensor, int *kernel, int *bias, int *requant_scale
+            int *output, int *tensor, int *kernel, int bias, int requant_scale
         ) {{
           {_init_biased_accumulators(split_size)}
 
@@ -316,5 +315,4 @@ def tensordot_int16_impl(
         }}
         """
     )
-    print(code)
     return code
