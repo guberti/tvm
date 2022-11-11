@@ -116,11 +116,11 @@ def qnn_conv2d(attrs, inputs, out_type):
                 #T.writes([OUTPUT[0, oh, ow, oc], OUTPUT[0, oh, ow, oc + 1]])
 
                 T.evaluate(T.call_extern(
-                    get_c_function_name(2, (384, 1, 8), (0, 0, 0), (8, 1)),
+                    get_c_function_name(2, (384, 1, 8), (0, 0, 0), (8, 16)),
                     T.tvm_access_ptr(
                         T.type_annotation(dtype="int16"),
                         OUTPUT.data,
-                        voh * 48 * 16 + vow * 16 + voc,
+                        voh * 48 * 16 + vow * 16 * 2 + voc,
                         16,
                         1,
                         dtype="handle",
@@ -128,7 +128,7 @@ def qnn_conv2d(attrs, inputs, out_type):
                     T.tvm_access_ptr(
                         T.type_annotation(dtype="int16"),
                         DATA.data,
-                        voh * 48 * 8 + vow * 8,
+                        voh * 48 * 8 + vow * 8 * 2,
                         16,
                         1,
                         dtype="handle",
@@ -136,14 +136,14 @@ def qnn_conv2d(attrs, inputs, out_type):
                     T.tvm_access_ptr(
                         T.type_annotation(dtype="int16"),
                         KERNEL.data,
-                        voc * 16,
+                        voc * 8,
                         16,
                         1,
                         dtype="handle",
                     ),
-                    BIAS[voc, 0, 0, 0],
+                    BIAS[0, 0, 0, voc],
                     REQUANTIZE_SCALE[voc],
-                    dtype="int16"
+                    dtype="int32"
                 ))
 
 
@@ -155,15 +155,14 @@ def schedule_qnn_conv2d(sch):
     conv2d_block = sch.get_block("conv2d")
     h_loop, w_loop, oc_loop = sch.get_loops(conv2d_block)
     sch.reorder(oc_loop, h_loop, w_loop)
-    sch.split(oc_loop, factors=(None, 2))
+    #sch.split(oc_loop, factors=(None, 2))
     sch.annotate(
         block_or_loop=conv2d_block,
         ann_key="pragma_import_c",
         ann_val=tensordot_int16_impl(
-            2, (384, 1, 8), (0, 0, 0), (8, 1)
+            2, (384, 1, 8), (0, 0, 0), (8, 16)
         )
     )
-
 
 
 def qnn_depthwise_conv2d(  # Conv2d inputs

@@ -60,9 +60,9 @@ def _init_biased_accumulators(split_size):
     can't use our SMULXY trick to set sum_i to zero for "free", and if done at the end it doesn't
     combine with anything. However, doing it at the beginning frees up a register/prevents needing
     to do a stack push/pop, so we'll do it first."""
-    var_names = map(lambda x: f"sum_{x:x}", range(split_size))
-    joined_var_names = ", ".join(var_names)
-    return f"int {joined_var_names} = bias;"
+    assignments = map(lambda x: f"sum_{x:x} = bias", range(split_size))
+    joined_assignments = ", ".join(assignments)
+    return f"int {joined_assignments};"
 
 
 def _get_tensor_halfwords(dimensions, offset, split_size, in_stride) -> Iterator:
@@ -226,7 +226,7 @@ def _requantize_sums(num_sums) -> Iterator[str]:
 
     for i in range(num_sums):
         yield f"int requant_{i} = (sum_{i} * (long long) requant_scale) >> 32;"
-        yield f"requant_{i} = __builtin_arm_ssat(requant_{i}, 8);"
+        yield f"requant_{i} = __builtin_arm_ssat(requant_{i} - 128, 8);"
 
 
 def _write_sums_to_memory(num_sums, offset, stride) -> Iterator[str]:

@@ -223,7 +223,7 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         module=tvm.IRModule.from_expr(test_function),
         inputs={"input": inputs_ndarr},
         outputs={"output": output_ndarr},
-        output_tolerance=2,
+        output_tolerance=1,
     )
     print(test_model.params)
 
@@ -248,16 +248,30 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
 
         return True
 
-    # Alter to be an int16 layout
-    def alter_layout(attrs, inputs, tinfos, out_type):
-        _prev_ops, in_scale, _in_zp, out_scale, _out_zp = inputs
+    # Compile-time zero point fusion!
+    def alter_bias_layout(attrs, inputs, tinfos, out_type):
+        print("Running alter_bias_layout!")
+        assert attrs is None
+        conv, biases = inputs
+        kernel = conv.args[1].data.numpy()
+        element_sums = np.sum(kernel, axis=(1, 2, 3))
+        zp_shifted_sums = element_sums * 128 # TODO read from zero point
+        new_biases = biases.data.numpy() + zp_shifted_sums
+        # TODO assert these are in the range representable by int32
+        bias_constant = relay.Constant(tvm.nd.array(new_biases.astype("int32")))
+        return relay.add(inputs[0], bias_constant)
+
+
+    # Alter integer quantization
+    def alter_requantize_layout(attrs, inputs, tinfos, out_type):
+        prev_ops, in_scale, _in_zp, out_scale, _out_zp = inputs
         in_scale_numpy = in_scale.data.numpy().astype("float64")
         out_scale_scalar = out_scale.data.numpy().item()
         scales = (in_scale_numpy / out_scale_scalar) * 2**32
         scale_constant = relay.Constant(tvm.nd.array(scales.astype("int32")))
         return relay.qnn.op.requantize(inputs[0], scale_constant, *inputs[2:], **attrs)
 
-    with TempOpAttr("qnn.requantize", "FTVMAlterOpLayout", alter_layout):
+    with TempOpAttr("add", "FTVMAlterOpLayout", alter_bias_layout), TempOpAttr("qnn.requantize", "FTVMAlterOpLayout", alter_requantize_layout):
         with tvm.transform.PassContext(
             opt_level=3,
             config={
