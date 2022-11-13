@@ -25,10 +25,6 @@ from tvm.tir import TensorIntrin
 from tvm.topi.arm_cpu.mprofile.dsp.micro_kernel import tensordot
 
 
-# Awful hack, must be removed before merging
-GENERATED_FUNCTIONS = set()
-
-
 def pick_tensordot_impl(attrs, data, kernel, is_depthwise):
     _, height, width, in_channels = get_const_tuple(data.shape)
     out_channels, kernel_h, kernel_w, _ = get_const_tuple(kernel.shape)
@@ -81,10 +77,8 @@ def qnn_conv2d(attrs, inputs, out_type):
     func_hyperparams = pick_tensordot_impl(attrs, data, kernel, False)
     func_name = tensordot.get_c_function_name(num_sums, *func_hyperparams)
     func_code = tensordot.tensordot_int16_impl(num_sums, *func_hyperparams)
-    GENERATED_FUNCTIONS.add(func_code)
 
     assert rq_scale.dtype == "int32"
-    assert len(rq_scale.shape) == 1
 
     @T.prim_func
     def biased_quantized_conv2d(
@@ -94,6 +88,7 @@ def qnn_conv2d(attrs, inputs, out_type):
         requantize_handle: T.handle,
         output_handle: T.handle,
     ) -> None:
+
         _batch_size, height, width, in_channels = _get_tscript_const_tuple(data.shape)
         out_channels, kernel_h, kernel_w, _ = _get_tscript_const_tuple(kernel.shape)
 
@@ -105,12 +100,14 @@ def qnn_conv2d(attrs, inputs, out_type):
         OUTPUT = T.match_buffer(output_handle, out_type.shape, dtype=out_type.dtype)
 
         # This hack prevents TVM from seeing these variables as "unused". I should be using T.reads
-        # and T.writes, but I can't get those to work. TODO fix this.
+        # and T.writes, but they don't work. I think it's an issue with BufferTouchedDomain.
+
         OUTPUT[0, 0, 0, 0] = 0
         x = DATA[0, 0, 0, 0]
         y = KERNEL[0, 0, 0, 0]
         for oh, ow, oc in T.grid(height, T.floordiv(width, 2), out_channels):
             with T.block("conv2d"):
+                T.block_attr({"pragma_import_c": func_code})
                 voh, vow, voc = T.axis.remap("SSS", [oh, ow, oc])
                 T.evaluate(
                     T.call_extern(
@@ -119,7 +116,7 @@ def qnn_conv2d(attrs, inputs, out_type):
                             T.type_annotation(dtype="int16"),
                             OUTPUT.data,
                             voh * width * out_channels + vow * out_channels * 2 + voc,
-                            out_channels,
+                            0,
                             1,
                             dtype="handle",
                         ),
@@ -127,7 +124,7 @@ def qnn_conv2d(attrs, inputs, out_type):
                             T.type_annotation(dtype="int16"),
                             DATA.data,
                             voh * width * in_channels + vow * in_channels * 2,
-                            out_channels,
+                            0,
                             1,
                             dtype="handle",
                         ),
@@ -135,7 +132,7 @@ def qnn_conv2d(attrs, inputs, out_type):
                             T.type_annotation(dtype="int16"),
                             KERNEL.data,
                             voc * in_channels,
-                            out_channels,
+                            0,
                             1,
                             dtype="handle",
                         ),
@@ -151,17 +148,5 @@ def qnn_conv2d(attrs, inputs, out_type):
     return [output]
 
 
-def join_generated_functions():
-    return "\n\n".join(GENERATED_FUNCTIONS)
-
-
-def schedule_qnn_conv2d(sch):
-    conv2d_block = sch.get_block("conv2d")
-
-    h_loop, w_loop, oc_loop = sch.get_loops(conv2d_block)
-    sch.reorder(oc_loop, h_loop, w_loop)
-    sch.annotate(
-        block_or_loop=conv2d_block,
-        ann_key="pragma_import_c",
-        ann_val=join_generated_functions(),
-    )
+def schedule_qnn_conv2d(attrs, outs, target):
+    return None
