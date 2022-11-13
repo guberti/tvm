@@ -17,7 +17,11 @@
 """microTVM cares a lot about the convolution + bias + requantize + fused ReLU use case. There have
 been some accuracy issues in the past, so this test steps through a model (MobileNetV1) layer by
 layer and ensures there is 1-1 correspondance at each step. This test would run way faster if we ran
-the model all at once, but then we wouldn't know which layers had issues."""
+the model all at once, but then we wouldn't know which layers had issues.
+
+Furthermore, this test uses some in-development optimizations for microTVM that aren't part of the
+main pipeline.
+"""
 
 import numpy as np
 from PIL import Image
@@ -149,10 +153,7 @@ def _get_quant_zp_const(quantization_dict, as_scalar = False):
     return relay.const(zero_points, "int32")
 
 
-
-
-
-@pytest.mark.parametrize("layer", range(2, 3))
+@pytest.mark.parametrize("layer", range(2, 30, 2))
 @tvm.testing.requires_corstone300
 def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
     schedule_name, dtype, padding, strides = _get_layer_attributes(layer)
@@ -225,7 +226,6 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         outputs={"output": output_ndarr},
         output_tolerance=1,
     )
-    print(test_model.params)
 
     target = tvm.target.Target("c -keys=arm_cpu -mcpu=cortex-m7")
     runtime = Runtime("crt")
@@ -239,18 +239,8 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         },
     )
 
-
-    # There should only be one operator
-    def schedule_fn(sch):
-        print(sch.mod.attrs["task_name"])
-        assert "fused_qnn_conv2d_add_qnn_requantize" in sch.mod.attrs["task_name"]
-        tvm.topi.arm_cpu.schedule_qnn_conv2d(sch)
-
-        return True
-
     # Compile-time zero point fusion!
     def alter_bias_layout(attrs, inputs, tinfos, out_type):
-        print("Running alter_bias_layout!")
         assert attrs is None
         conv, biases = inputs
         kernel = conv.args[1].data.numpy()
@@ -267,9 +257,16 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         prev_ops, in_scale, _in_zp, out_scale, _out_zp = inputs
         in_scale_numpy = in_scale.data.numpy().astype("float64")
         out_scale_scalar = out_scale.data.numpy().item()
-        scales = (in_scale_numpy / out_scale_scalar) * 2**32
+        scales = (in_scale_numpy / out_scale_scalar) * 2**33
         scale_constant = relay.Constant(tvm.nd.array(scales.astype("int32")))
         return relay.qnn.op.requantize(inputs[0], scale_constant, *inputs[2:], **attrs)
+
+
+    # There should only be one operator
+    def schedule_fn(sch):
+        assert "fused_qnn_conv2d_add_qnn_requantize" in sch.mod.attrs["task_name"]
+        tvm.topi.arm_cpu.schedule_qnn_conv2d(sch)
+        return True
 
     with TempOpAttr("add", "FTVMAlterOpLayout", alter_bias_layout), TempOpAttr("qnn.requantize", "FTVMAlterOpLayout", alter_requantize_layout):
         with tvm.transform.PassContext(

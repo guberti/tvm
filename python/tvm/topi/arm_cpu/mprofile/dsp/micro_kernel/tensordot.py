@@ -39,21 +39,6 @@ def get_c_function_name(split_size, dimensions, offsets, x_strides):
     )
 
 
-def _is_pow_2(number):
-    """Checks if `number` is a power of `2`."""
-    return number & (number - 1) == 0 and number > 0
-
-
-def _count_factorization_2s(number):
-    """Returns the number of times `2` appears in the factorization of `number`."""
-    assert isinstance(number, int)
-    count = 0
-    while number % 2 == 0:
-        number // 2
-        count += 1
-    return count
-
-
 def _init_biased_accumulators(split_size):
     """Addition is commutative, so we could add the bias before, during, or after performing our
     multiply-accumulate operations. It "costs" one cycle either way - if done at the beginning we
@@ -226,6 +211,7 @@ def _requantize_sums(num_sums) -> Iterator[str]:
 
     for i in range(num_sums):
         yield f"int requant_{i} = (sum_{i} * (long long) requant_scale) >> 32;"
+        yield f"requant_{i} = (requant_{i} + 1) >> 1;"
         yield f"requant_{i} = __builtin_arm_ssat(requant_{i} - 128, 8);"
 
 
