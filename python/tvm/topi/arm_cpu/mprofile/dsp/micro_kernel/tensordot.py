@@ -301,4 +301,4 @@ def tensordot_int16_impl(
         }}
         """
     )
-    return code
+    return (function_name, code)

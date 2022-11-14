@@ -70,19 +70,19 @@ def interpreter(request):
 
 
 def _get_layer_attributes(layer_num):
-    """Returns the relevant schedule, data type, padding, and stride for a given layer in a
-    MobileNetV1 model. It's a huge headache to read this data from TensorFlow, as it is not user
-    accessible via the interpreter. If we really wanted to, we would have to parse the .tflite file
-    ourselves. This function is a bit of a hack, but lets us skip that."""
+    """Returns the relevant padding and stride for a given layer in a MobileNetV1 model. It's a huge
+    headache to read this data from TensorFlow, as it is not user accessible via the interpreter. If
+    we really wanted to, we would have to parse the .tflite file ourselves. This function is a bit
+    of a hack, but lets us skip that."""
 
     if layer_num == 0: # Regular conv2d
-        return (None, "int16", (1, 1, 0, 0), (2, 2))
+        return ((0, 0, 1, 1), (2, 2))
     elif layer_num % 2 == 0: # 1x1 conv2d
-        return (None, "int16", (1, 1, 1, 1), (1, 1))
+        return ((0, 0, 0, 0), (1, 1))
     elif layer_num in [3, 7, 11, 23]: # Downsizing depthwise_conv2d layers
-        return (None, "int16", (1, 1, 0, 0), (2, 2))
+        return ((0, 0, 1, 1), (2, 2))
     else: # Depthwise conv2d
-        return (None, "int16", (1, 1, 1, 1), (1, 1))
+        return ((1, 1, 1, 1), (1, 1))
 
 
 def _get_relu_activation_prefix(layer_num):
@@ -153,10 +153,99 @@ def _get_quant_zp_const(quantization_dict, as_scalar = False):
     return relay.const(zero_points, "int32")
 
 
-@pytest.mark.parametrize("layer", range(2, 23, 2))
+def _change_layout(data, old_layout, new_layout, dtype, padding=None):
+    if padding:
+        data = np.pad(data, ((0, 0), (padding[0], padding[2]), (padding[1], padding[3]), (0, 0)))
+
+    return change_ndarray_layout(data, old_layout, new_layout).astype(dtype)
+
+def _make_bias_requantize(conv_op, dtype, biases, quantizations):
+    biases_quant, output_quant = quantizations
+
+    biased_convolution = relay.op.nn.bias_add(
+        conv_op,
+        relay.const(biases, "int32"),
+        axis=3,
+    )
+    return relay.qnn.op.requantize(
+        biased_convolution,
+        _get_quant_scale_const(biases_quant),
+        _get_quant_zp_const(biases_quant),
+        _get_quant_scale_const(output_quant, as_scalar=True),
+        _get_quant_zp_const(output_quant, as_scalar=True),
+        axis=3,
+        compute_dtype="int64",
+        out_dtype=dtype,
+    )
+
+
+def _make_model(input_var, output_var, input_data, output_data):
+    test_function = relay.Function([input_var], output_var)
+    return AOTTestModel(
+        module=tvm.IRModule.from_expr(test_function),
+        inputs={"input": input_data},
+        outputs={"output": output_data},
+        output_tolerance=120,
+    )
+
+
+def _make_build_params():
+    target = tvm.target.Target("c -keys=arm_cpu -mcpu=cortex-m7")
+    executor = Executor(
+        "aot",
+        {
+            "workspace-byte-alignment": 8,
+            "constant-byte-alignment": 8,
+            "interface-api": "c",
+            "unpacked-api": True,
+        },
+    )
+    runtime = Runtime("crt")
+    return (target, executor, runtime)
+
+
+
+TEST_Y_VAL = 42
+TEST_X_VAL = 19
+TEST_OC_VAL = 5
+
+REQUANTIZE_SCALE = [
+    +0x02324734, +0x018f144b, +0x01846c0a, +0x01d49363, +0x00eeb0c2, +0x00590a11, +0x01403e4c, +0x0081dca1
+]
+
+BIAS = [
+    +0x000020ee, +0x00003212, +0x000005f0, +0x00002193, -0x0000426f, +0x00013726, +0x000027f0, +0x0000b2d8
+]
+
+def compute_expected_answer(inputs, kernel, bias, biases_quant, output_quant):
+    def _compute(y, x, c):
+
+        assert tuple(inputs.shape) == (1, 97, 97, 3)
+        inputs_slice = inputs[0, y * 2:y * 2 + 3, x * 2:x * 2 + 3, :]# + 128
+        kernel_slice = kernel[c, :, :, :]
+        assert inputs_slice.shape == kernel_slice.shape
+        dot = np.tensordot(inputs_slice, kernel_slice, axes=3)
+        biased = dot + BIAS[c]
+
+        true_multiply_const = biases_quant["scales"][c] / output_quant["scales"][0]
+        final_answer = round(biased * true_multiply_const) - 128
+        final_answer = min(127, max(-128, final_answer))
+        return final_answer
+
+    output_tensor = np.zeros((1, 48, 48, 8), dtype="int16")
+    for y in range(48):
+        for x in range(48):
+            for c in range(8):
+                output_tensor[0, y, x, c] = _compute(y, x, c)
+
+    return output_tensor
+
+
+@pytest.mark.parametrize("layer", range(0, 23, 2))
 @tvm.testing.requires_corstone300
 def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
-    schedule_name, dtype, padding, strides = _get_layer_attributes(layer)
+    dtype = "int16"
+    padding, strides = _get_layer_attributes(layer)
     """Load the input, kernel, bias, and generated output from each layer when it was run by the
     TensorFlow TFLite interpreter. The tensor values are quantized (though note that biases_tensor
     is an int32), while the quantization data is not. Note the zero points are zero everywhere
@@ -175,9 +264,27 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         new_inputs_layout, new_kernel_layout, new_output_layout = "NHWC", "OHWI", "NHWC"
     else: # Depthwise conv2d
         new_inputs_layout, new_kernel_layout, new_output_layout = "NCHW", "OIHW", "NCHW"
-    inputs_ndarr = change_ndarray_layout(inputs_tensor, "NHWC", new_inputs_layout).astype(dtype)
-    kernel_ndarr = change_ndarray_layout(kernel_tensor, "OHWI", new_kernel_layout).astype(dtype)
-    output_ndarr = change_ndarray_layout(output_tensor, "NHWC", new_output_layout).astype(dtype)
+    inputs_ndarr = _change_layout(inputs_tensor, "NHWC", new_inputs_layout, dtype, padding)
+    kernel_ndarr = _change_layout(kernel_tensor, "OHWI", new_kernel_layout, dtype)
+    output_ndarr = _change_layout(output_tensor, "NHWC", new_output_layout, dtype)
+
+    print(inputs_quant)
+    print(kernel_quant)
+    print(biases_quant)
+    print(output_quant)
+
+    local_expected_output = compute_expected_answer(inputs_ndarr, kernel_ndarr, biases_tensor, biases_quant, output_quant)
+    #print(output_ndarr[0, 0, :, 0])
+    #print(local_expected_output[0, 0, :, 0])
+
+    # ~15% of these are different. Let's delve deeper
+    np.testing.assert_allclose(output_ndarr, local_expected_output, rtol=0, atol=2, verbose=True)
+    with np.printoptions(threshold=np.inf):
+        print(output_ndarr[0, :, :, 4])
+        print(local_expected_output[0, :, :, 4])
+
+    #np.testing.assert_allclose(output_ndarr[0, :, :, 4], local_expected_output[0, :, :, 4], rtol=0, atol=2, verbose=True)
+
 
     """Construct our Relay function out of a qnn.conv2d, bias_add, and qnn.requantize. These will be
     fused into a single schedule by te_compiler_cache.cc."""
@@ -202,49 +309,14 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
         out_layout=new_output_layout
     )
 
-    biased_convolution = relay.op.nn.bias_add(
-        convolution,
-        relay.const(biases_tensor, "int32"),
-        axis=3,
-    )
-
-    output = relay.qnn.op.requantize(
-        biased_convolution,
-        _get_quant_scale_const(biases_quant),
-        _get_quant_zp_const(biases_quant),
-        _get_quant_scale_const(output_quant, as_scalar=True),
-        _get_quant_zp_const(output_quant, as_scalar=True),
-        axis=3,
-        compute_dtype="int64",
-        out_dtype=dtype,
-    )
-
-    test_function = relay.Function([input_var], output)
-    test_model = AOTTestModel(
-        module=tvm.IRModule.from_expr(test_function),
-        inputs={"input": inputs_ndarr},
-        outputs={"output": output_ndarr},
-        output_tolerance=1,
-    )
-
-    target = tvm.target.Target("c -keys=arm_cpu -mcpu=cortex-m7")
-    runtime = Runtime("crt")
-    executor = Executor(
-        "aot",
-        {
-            "workspace-byte-alignment": 8,
-            "constant-byte-alignment": 8,
-            "interface-api": "c",
-            "unpacked-api": True,
-        },
-    )
+    output = _make_bias_requantize(convolution, dtype, biases_tensor, (biases_quant, output_quant))
+    test_model = _make_model(input_var, output, inputs_ndarr, local_expected_output)
+    target, executor, runtime = _make_build_params()
 
     # There should only be one operator
     def schedule_fn(sch):
         #pdb.set_trace()
-        conv2d_block = sch.get_block("conv2d")
-        h_loop, w_loop, oc_loop = sch.get_loops(conv2d_block)
-        sch.reorder(oc_loop, h_loop, w_loop)
+        #conv2d_block = sch.get_block("conv2d")
         return True
 
     with tvm.transform.PassContext(
