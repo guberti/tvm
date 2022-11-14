@@ -56,13 +56,6 @@ def _pick_tensordot_impl(attrs, data, kernel, num_sums=2, is_depthwise=False):
         dimensions = (width * in_channels, kernel_h, kernel_w * in_channels)
         in_stride = in_channels * stride_w
 
-    # These restrictions aren't always true, and might cause problems.
-    # However, they won't be hit when running any common model (AFAIK).
-
-    #import pdb
-    #pdb.set_trace()
-    #assert out_width % num_sums == 0
-
     assert attrs.out_layout is not None
     if attrs.out_layout == "NHWC":
         out_stride = out_channels
@@ -105,31 +98,6 @@ def _get_tscript_const_tuple(values):
 
 def _make_tscript_val(val):
     return tvm.tir.const(val)
-
-
-INSPECTION_CODE = textwrap.dedent("""
-    #include <assert.h>
-    inspect_output(int16_t *output) {{
-      assert (output[0] == -107); // Passes
-      assert (output[1] == -75); // Passes
-      assert (output[2] == -128); // Passes
-      assert (output[3] == -126); // Passes
-      assert (output[6] == -123); // Passes
-      assert (output[7] == -107); // Passes
-      assert (output[8] == -108); // Passes
-      assert (output[9] == -74); // Passes
-      assert (output[48 * 8] == -106); // Passes
-      assert (output[48 * 8 + 8] == -107); // Passes
-      assert (output[48 * 8 + 8 + 1] == -71); // Passes
-      assert (output[48 * 8 * 42 + 8 * 19 + 4] == -103); // Passes
-      assert (output[48 * 8 * 42 + 8 * 19 + 5] == -66); // Passes
-      assert (output[8 * 47 + 0] == -94);
-
-      while (true) {{}}
-      return 0;
-    }}
-    """
-)
 
 
 def qnn_conv2d(attrs, inputs, out_type):

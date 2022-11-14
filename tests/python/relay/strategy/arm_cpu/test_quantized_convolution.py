@@ -155,8 +155,7 @@ def _get_quant_zp_const(quantization_dict, as_scalar = False):
 
 def _change_layout(data, old_layout, new_layout, dtype, padding=None):
     if padding:
-        data = np.pad(data, ((0, 0), (padding[0], padding[2]), (padding[1], padding[3]), (0, 0)))
-
+        data = np.pad(data, ((0, 0), (padding[0], padding[2]), (padding[1], padding[3]), (0, 0)), constant_values=-128)
     return change_ndarray_layout(data, old_layout, new_layout).astype(dtype)
 
 def _make_bias_requantize(conv_op, dtype, biases, quantizations):
@@ -185,7 +184,7 @@ def _make_model(input_var, output_var, input_data, output_data):
         module=tvm.IRModule.from_expr(test_function),
         inputs={"input": input_data},
         outputs={"output": output_data},
-        output_tolerance=120,
+        output_tolerance=1,
     )
 
 
@@ -204,11 +203,6 @@ def _make_build_params():
     return (target, executor, runtime)
 
 
-
-TEST_Y_VAL = 42
-TEST_X_VAL = 19
-TEST_OC_VAL = 5
-
 REQUANTIZE_SCALE = [
     +0x02324734, +0x018f144b, +0x01846c0a, +0x01d49363, +0x00eeb0c2, +0x00590a11, +0x01403e4c, +0x0081dca1
 ]
@@ -220,16 +214,13 @@ BIAS = [
 def compute_expected_answer(inputs, kernel, bias, biases_quant, output_quant):
     def _compute(y, x, c):
 
-        assert tuple(inputs.shape) == (1, 97, 97, 3)
-        inputs_slice = inputs[0, y * 2:y * 2 + 3, x * 2:x * 2 + 3, :]# + 128
+        inputs_slice = inputs[0, y * 2:y * 2 + 3, x * 2:x * 2 + 3, :]
         kernel_slice = kernel[c, :, :, :]
-        assert inputs_slice.shape == kernel_slice.shape
-        dot = np.tensordot(inputs_slice, kernel_slice, axes=3)
+        dot = np.tensordot(inputs_slice.astype("int64"), kernel_slice.astype("int64"), axes=3)
         biased = dot + BIAS[c]
-
-        true_multiply_const = biases_quant["scales"][c] / output_quant["scales"][0]
-        final_answer = round(biased * true_multiply_const) - 128
-        final_answer = min(127, max(-128, final_answer))
+        requantize_scale = REQUANTIZE_SCALE[c]
+        product = ((biased * requantize_scale >> 32) + 1) >> 1
+        final_answer = min(127, max(-128, product - 128))
         return final_answer
 
     output_tensor = np.zeros((1, 48, 48, 8), dtype="int16")
@@ -268,23 +259,8 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
     kernel_ndarr = _change_layout(kernel_tensor, "OHWI", new_kernel_layout, dtype)
     output_ndarr = _change_layout(output_tensor, "NHWC", new_output_layout, dtype)
 
-    print(inputs_quant)
-    print(kernel_quant)
-    print(biases_quant)
-    print(output_quant)
-
     local_expected_output = compute_expected_answer(inputs_ndarr, kernel_ndarr, biases_tensor, biases_quant, output_quant)
-    #print(output_ndarr[0, 0, :, 0])
-    #print(local_expected_output[0, 0, :, 0])
-
-    # ~15% of these are different. Let's delve deeper
-    np.testing.assert_allclose(output_ndarr, local_expected_output, rtol=0, atol=2, verbose=True)
-    with np.printoptions(threshold=np.inf):
-        print(output_ndarr[0, :, :, 4])
-        print(local_expected_output[0, :, :, 4])
-
-    #np.testing.assert_allclose(output_ndarr[0, :, :, 4], local_expected_output[0, :, :, 4], rtol=0, atol=2, verbose=True)
-
+    np.testing.assert_allclose(output_ndarr, local_expected_output, rtol=0, atol=1, verbose=True)
 
     """Construct our Relay function out of a qnn.conv2d, bias_add, and qnn.requantize. These will be
     fused into a single schedule by te_compiler_cache.cc."""
@@ -310,7 +286,7 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
     )
 
     output = _make_bias_requantize(convolution, dtype, biases_tensor, (biases_quant, output_quant))
-    test_model = _make_model(input_var, output, inputs_ndarr, local_expected_output)
+    test_model = _make_model(input_var, output, inputs_ndarr, output_ndarr)
     target, executor, runtime = _make_build_params()
 
     # There should only be one operator
