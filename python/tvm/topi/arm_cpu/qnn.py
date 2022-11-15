@@ -29,7 +29,7 @@ from tvm.tir import TensorIntrin
 from tvm.topi.arm_cpu.mprofile.dsp.micro_kernel import tensordot
 import textwrap
 
-def _pick_tensordot_impl(attrs, data, kernel, num_sums=2, is_depthwise=False):
+def _pick_tensordot_impl(attrs, data, kernel, out_type, num_sums=2, is_depthwise=False):
     """Helper function that chooses the right implementation of micro_kernel.tensordot depending on
     the input parameters of the conv2d. It returns a tuple of TWO function_name, function_code
     pairs - one (the aligned one) for even-numbered output channels, and one (the offset one) for
@@ -43,6 +43,7 @@ def _pick_tensordot_impl(attrs, data, kernel, num_sums=2, is_depthwise=False):
 
     _, height, width, in_channels = get_const_tuple(data.shape)
     out_channels, kernel_h, kernel_w, _ = get_const_tuple(kernel.shape)
+    _, out_height, out_width, _ = get_const_tuple(out_type.shape)
     stride_h, stride_w = get_const_tuple(attrs.strides)
 
     if is_depthwise:
@@ -70,13 +71,10 @@ def _pick_tensordot_impl(attrs, data, kernel, num_sums=2, is_depthwise=False):
 
     # Figure out if we will need to alternate function calls between output channels. This isn't
     # that rare (maybe 1/50 layers in common models), so we need to support it.
-    tensor_per_oc_size = height * dimensions[0]
     kernel_per_oc_size = dimensions[1] * dimensions[2]
-
+    offsets = (0, (kernel_per_oc_size % 2), 0)
     # If either is odd, we need to alternate
-    if (tensor_per_oc_size % 2) or (kernel_per_oc_size % 2):
-        #offsets = ((tensor_per_oc_size % 2), (kernel_per_oc_size % 2), 0)
-        offsets = (0, 1, 1)
+    if any(offsets):
         offset_func = tensordot.tensordot_int16_impl(num_sums, dimensions, offsets, x_strides)
     else:
         offset_func = ("", "")
@@ -137,7 +135,7 @@ def qnn_conv2d(attrs, inputs, out_type):
 
     _pick_tensordot_impl decides whether this is the case. If not, we only want to generate one
     function (to save flash), so offset_func is a tuple of empty strings."""
-    aligned_func, offset_func = _pick_tensordot_impl(attrs, data, kernel, num_sums, False)
+    aligned_func, offset_func = _pick_tensordot_impl(attrs, data, kernel, out_type, num_sums, False)
     aligned_func_name, aligned_func_code = aligned_func
     offset_func_name, offset_func_code = offset_func
 
@@ -240,7 +238,7 @@ def qnn_conv2d(attrs, inputs, out_type):
                         T.tvm_access_ptr(
                             T.type_annotation(dtype="int16"),
                             OUTPUT.data,
-                            voh * tc_out_y_stride + vow * tc_out_x_stride + voc * tc_oc_step,
+                            voh * tc_out_y_stride + vow * tc_out_x_stride + voc * tc_oc_step + 1,
                             0,
                             1,
                             dtype="handle",
@@ -266,21 +264,6 @@ def qnn_conv2d(attrs, inputs, out_type):
                         dtype="int32",
                     )
                 )
-
-        with T.block("inspection"):
-            T.block_attr({"pragma_import_c": INSPECTION_CODE})
-            T.evaluate(T.call_extern(
-                "inspect_output",
-                T.tvm_access_ptr(
-                    T.type_annotation(dtype="int16"),
-                    OUTPUT.data,
-                    0,
-                    48 * 48 * 8,
-                    1,
-                    dtype="handle",
-                ),
-                dtype="int32"
-            ))
 
     output = te.extern_primfunc(
         [data, kernel, bias, rq_scale], biased_quantized_conv2d, name="tir", dtype="int16"

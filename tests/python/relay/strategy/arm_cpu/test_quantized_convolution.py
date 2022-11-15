@@ -202,37 +202,7 @@ def _make_build_params():
     runtime = Runtime("crt")
     return (target, executor, runtime)
 
-
-REQUANTIZE_SCALE = [
-    +0x02324734, +0x018f144b, +0x01846c0a, +0x01d49363, +0x00eeb0c2, +0x00590a11, +0x01403e4c, +0x0081dca1
-]
-
-BIAS = [
-    +0x000020ee, +0x00003212, +0x000005f0, +0x00002193, -0x0000426f, +0x00013726, +0x000027f0, +0x0000b2d8
-]
-
-def compute_expected_answer(inputs, kernel, bias, biases_quant, output_quant):
-    def _compute(y, x, c):
-
-        inputs_slice = inputs[0, y * 2:y * 2 + 3, x * 2:x * 2 + 3, :]
-        kernel_slice = kernel[c, :, :, :]
-        dot = np.tensordot(inputs_slice.astype("int64"), kernel_slice.astype("int64"), axes=3)
-        biased = dot + BIAS[c]
-        requantize_scale = REQUANTIZE_SCALE[c]
-        product = ((biased * requantize_scale >> 32) + 1) >> 1
-        final_answer = min(127, max(-128, product - 128))
-        return final_answer
-
-    output_tensor = np.zeros((1, 48, 48, 8), dtype="int16")
-    for y in range(48):
-        for x in range(48):
-            for c in range(8):
-                output_tensor[0, y, x, c] = _compute(y, x, c)
-
-    return output_tensor
-
-
-@pytest.mark.parametrize("layer", range(0, 23, 2))
+@pytest.mark.parametrize("layer", range(1, 2))
 @tvm.testing.requires_corstone300
 def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
     dtype = "int16"
@@ -258,9 +228,6 @@ def test_qnn_conv2d_mobilenetv1_layer(layer, interpreter):
     inputs_ndarr = _change_layout(inputs_tensor, "NHWC", new_inputs_layout, dtype, padding)
     kernel_ndarr = _change_layout(kernel_tensor, "OHWI", new_kernel_layout, dtype)
     output_ndarr = _change_layout(output_tensor, "NHWC", new_output_layout, dtype)
-
-    local_expected_output = compute_expected_answer(inputs_ndarr, kernel_ndarr, biases_tensor, biases_quant, output_quant)
-    np.testing.assert_allclose(output_ndarr, local_expected_output, rtol=0, atol=1, verbose=True)
 
     """Construct our Relay function out of a qnn.conv2d, bias_add, and qnn.requantize. These will be
     fused into a single schedule by te_compiler_cache.cc."""
