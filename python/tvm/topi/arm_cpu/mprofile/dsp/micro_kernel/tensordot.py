@@ -125,10 +125,10 @@ def _apply_simd_optimizations(instruction_tuples) -> Iterator[Tuple]:
 
         if curr_tuple[1:] == next_tuple[1:]:
             if set([curr_tuple[0], next_tuple[0]]) == set(["smlatt", "smlabb"]):
-                yield "smlad", *curr_tuple[1:]
+                yield ("smlad", *curr_tuple[1:])
                 next_tuple = next(instruction_tuples, None)
             elif set([curr_tuple[0], next_tuple[0]]) == set(["smlatb", "smlabt"]):
-                yield "smladx", *curr_tuple[1:]
+                yield ("smladx", *curr_tuple[1:])
                 next_tuple = next(instruction_tuples, None)
             else:
                 yield curr_tuple
