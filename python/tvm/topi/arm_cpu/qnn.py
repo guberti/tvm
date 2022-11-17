@@ -80,10 +80,9 @@ def _pick_tensordot_impl(attrs, data, kernel, num_sums=2, is_depthwise=False):
     x_strides = (in_stride, out_stride)
     aligned_func = tensordot.tensordot_int16_impl(num_sums, dimensions, (0, 0, 0), x_strides)
 
-    # Figure out if we will need to alternate function calls between output channels. This isn't
-    # that rare (maybe 1/50 layers in common models), so we need to support it.
     kernel_per_oc_size = dimensions[1] * dimensions[2]
-    offsets = (0, (kernel_per_oc_size % 2), 0)
+
+    offsets = (data_per_oc_size % 2, (kernel_per_oc_size % 2), 0)
     offset_func = tensordot.tensordot_int16_impl(num_sums, dimensions, offsets, x_strides)
 
     return (aligned_func, offset_func)
@@ -317,12 +316,18 @@ def qnn_depthwise_conv2d(attrs, inputs, out_type):
         aligned_calls = tvm.tir.const(out_channels // 2)
         offset_calls = tvm.tir.const(out_channels // 2)
         tc_oc_step = tvm.tir.const(2)
+        if height * width % 2 == 1:
+            x_ptr_offset = tvm.tir.const(-1)
+        else:
+            x_ptr_offset = tvm.tir.const(0)
+
 
     else:
         assert False
         aligned_calls = tvm.tir.const(out_channels)
         offset_calls = tvm.tir.const(0)
         tc_oc_step = tvm.tir.const(1)
+        x_ptr_offset = tvm.tir.const(0)
 
     """Step four: we set up some constants to help index into our buffers. Data layout is NHWC."""
 
@@ -424,7 +429,7 @@ def qnn_depthwise_conv2d(attrs, inputs, out_type):
                         T.tvm_access_ptr(
                             T.type_annotation(dtype="int16"),
                             DATA.data,
-                            (voc * tc_oc_step + 1) * tc_data_oc_stride + voh * tc_data_y_stride + vow * tc_data_x_stride,
+                            (voc * tc_oc_step + 1) * tc_data_oc_stride + voh * tc_data_y_stride + vow * tc_data_x_stride + x_ptr_offset,
                             0,
                             1,
                             dtype="handle",
