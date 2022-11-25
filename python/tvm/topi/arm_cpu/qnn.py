@@ -23,7 +23,7 @@ Arm Cortex-M with DSP.
 from typing import Callable, Tuple
 
 import tvm
-from tvm import te
+from tvm import te, TVMError
 from tvm.tir import const
 from tvm.script import tir as T
 from ..utils import get_const_tuple
@@ -36,6 +36,19 @@ def int_ceil_division(x, y):
 
 def _compute_output_dim(data_length, kernel_length, stride):
     return int_ceil_division(data_length + 1 - kernel_length, stride)
+
+
+def _pick_num_sums(out_width):
+    """Guess a good value for num_sums."""
+
+    assert out_width > 1
+
+    # num_sums is capped at 8
+    for i in range(2, min(out_width + 1, 8)):
+        if out_width % i == 0:
+            return i
+
+    raise TVMError(f"Cannot pick a good num_sums value for out_width = {out_width}!")
 
 
 def _pick_tensordot_impl(attrs, inputs, num_outputs=2, is_depthwise=False):
@@ -254,9 +267,8 @@ def qnn_conv2d(attrs, inputs, out_type):
     # Decide how many sums our function should have running at the same time. Doing
     # this lets us do "more work" for each memory load, but doing too many of them causes us to run
     # out of registers. Currently this is set to either 1 or 2, but autotuning this value would
-    # improve performance a lot. Tracked by https://github.com/apache/tvm/issues/13528.
-
-    num_outputs = 2
+    # improve performance a lot.
+    num_sums = _pick_num_sums(out_width)
 
     # Next, decide whether whether we need "parity alternation". For example, if we have an
     # 8x3x3x3 kernel (8 output channels, height 3, width 3, input channels 3) in the OHWI layout,
@@ -328,7 +340,7 @@ def qnn_depthwise_conv2d(attrs, inputs, out_type):
     out_height = _compute_output_dim(height, kernel_h, y_stride)
     out_width = _compute_output_dim(width, kernel_w, x_stride)
 
-    num_outputs = 2
+    num_sums = _pick_num_sums(out_width)
 
     aligned_func, offset_func = _pick_tensordot_impl(attrs, inputs, num_outputs, True)
 
