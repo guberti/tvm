@@ -59,6 +59,8 @@ def qnn_conv2d_strategy_arm_cpu(attrs, inputs, _out_type, target):
                 topi.arm_cpu.schedule_qnn_conv2d,
                 name="qnn_conv2d.arm_cpu",
             )
+        else:
+            raise TVMError("QNN regular Conv2D for Arm Cortex-M DSP got incorrect input layout!")
     elif is_depthwise_conv2d(data.shape, data_layout, kernel.shape, kernel_layout, groups):
         if data_layout == "NCHW" and kernel_layout == "IOHW":
             strategy.add_implementation(
@@ -66,7 +68,10 @@ def qnn_conv2d_strategy_arm_cpu(attrs, inputs, _out_type, target):
                 topi.arm_cpu.schedule_qnn_depthwise_conv2d,
                 name="qnn_depthwise_conv2d.arm_cpu",
             )
+        else:
+            raise TVMError("QNN depthwise Conv2D for Arm Cortex-M DSP got incorrect input layout!")
     else:
         raise TVMError("No Arm Cortex-M DSP strategy exists for generic group qnn.conv2d")
 
     return strategy
+
