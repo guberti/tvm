@@ -25,6 +25,7 @@ from ...op.strategy.generic import is_depthwise_conv2d
 
 @reg.register_convert_op_layout("qnn.conv2d")
 def convert_qnn_conv2d(attrs, inputs, tinfos, desired_layouts):
+    assert False
     """Convert Layout pass registration for QNN conv2d op.
 
     Parameters
