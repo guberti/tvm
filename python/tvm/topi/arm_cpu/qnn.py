@@ -263,7 +263,9 @@ def qnn_conv2d(attrs, inputs, out_type):
     out_channels, kernel_h, kernel_w, _ = get_const_tuple(kernel.shape)
     y_stride, x_stride = get_const_tuple(attrs.strides)
 
-    rq_input_zero_point_const = inputs[8].op.body[0]
+    #rq_input_zero_point_const = inputs[8].op.body[0]
+    rq_input_zero_point_const = -128
+
     padding = get_const_tuple(attrs.padding)
     if any(padding):
         pad_up, pad_left, pad_down, pad_right = padding
@@ -352,7 +354,8 @@ def qnn_depthwise_conv2d(attrs, inputs, out_type):
     _, out_channels, kernel_h, kernel_w = get_const_tuple(kernel.shape)
     y_stride, x_stride = get_const_tuple(attrs.strides)
 
-    rq_input_zero_point_const = inputs[8].op.body[0]
+    #rq_input_zero_point_const = inputs[8].op.body[0]
+    rq_input_zero_point_const = -128
     padding = get_const_tuple(attrs.padding)
     if any(padding):
         pad_up, pad_left, pad_down, pad_right = padding

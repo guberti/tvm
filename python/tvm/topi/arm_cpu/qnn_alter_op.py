@@ -38,19 +38,12 @@ def _is_qnn_op_depthwise_conv2d(attrs, inputs):
 
 @qnn_conv2d_alter_layout.register(["arm_cpu"])
 def alter_conv2d_layout(attrs, inputs, _tinfos, _out_type):
+    return None
     """Adjust a qnn.conv2d and preceeding ops to better fit on Cortex-M.
     """
-
-    # Step one - alter op to be int16. We always do this
-
-
     #import pdb
     #pdb.set_trace()
     data_expr, kernel_expr = inputs[:2]
-    print(data_expr)
-    print("----" * 16)
-    print()
-
     data_int16 = relay.cast(data_expr, dtype="int16")
     kernel_int16 = relay.cast(kernel_expr, dtype="int16")
 
@@ -76,7 +69,6 @@ def alter_add_layout(_attrs, inputs, _tinfos, _out_type):
     Currently only supports qnn.conv2d, but qnn.dense support should be added. Note that this
     optimization means we must pad tensors with the input zero point, and NOT with zero.
     """
-    return None
     prev_op, biases_data_op = inputs
     if not hasattr(prev_op, "op"):
         return None
@@ -90,9 +82,6 @@ def alter_add_layout(_attrs, inputs, _tinfos, _out_type):
     if not "cortex-m" in current_target.mcpu:
         return None
 
-    print(prev_op)
-    import pdb
-    pdb.set_trace()
     conv_input_zp = prev_op.args[2].data.numpy().item()
     kernel = prev_op.args[1].data.numpy()
 
