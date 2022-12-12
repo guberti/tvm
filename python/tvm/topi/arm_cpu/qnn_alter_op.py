@@ -160,4 +160,6 @@ def alter_requantize_layout(attrs, inputs, _tinfos, _out_type):
     fake_float_scales = scales.view("float32")
 
     scale_constant = relay.Constant(nd.array(fake_float_scales))
-    return relay.qnn.op.requantize(inputs[0], scale_constant, *inputs[2:], **attrs)
+    new_attrs = {k: attrs[k] for k in attrs.keys()}
+    new_attrs["out_dtype"] = "int16"
+    return relay.qnn.op.requantize(inputs[0], scale_constant, *inputs[2:], **new_attrs)
