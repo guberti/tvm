@@ -19,44 +19,83 @@
 import numpy as np
 
 from tvm import nd, relay, target
-from ..nn import qnn_conv2d_alter_layout, qnn_add_alter_layout, qnn_requantize_alter_layout
+from ..nn import *
+
+import pdb
+
+def _prev_ops_match(curr_op, pattern):
+    prev_op = curr_op
+    for op_name in pattern:
+        print(f"Looking for {op_name}")
+        prev_op = prev_op.args[0]
+        if (not hasattr(prev_op, "op")) or prev_op.op.name != op_name:
+            print(f"Broke on {prev_op.op.name}")
+            return False
+    return True
 
 
-def _is_qnn_op_depthwise_conv2d(attrs, inputs):
-    #from tvm.relay.frontend.common import infer_shape
-    return attrs.groups > 1
-    #
-    #return relay.op.strategy.generic.is_depthwise_conv2d(
-    #    infer_shape(inputs[0]),
-    #    attrs.data_layout,
-    #    inputs[1].data.shape,
-    #    attrs.kernel_layout,
-    #    attrs.groups,
-    #)
+def _edit_attrs(attrs, **kwargs):
+    print(attrs)
+    return {**attrs, **kwargs}
 
+
+def alter_depthwise_conv2d_layout(op):
+    cast_op = op.args[0]
+    requantize_op = cast_op.args[0]
+    add_op = requantize_op.args[0]
+    prev_conv2d_op = add_op.args[0]
+    return relay.qnn.op.conv2d(
+        relay.cast(
+            relay.qnn.op.requantize(
+                relay.op.add(
+                    relay.qnn.op.conv2d(
+                        *prev_conv2d_op.args,
+                        **_edit_attrs(prev_conv2d_op.attrs, out_layout="NCHW"),
+                    ),
+                    add_op.args[1],
+                ),
+                *requantize_op.args[1:],
+                **requantize_op.attrs,
+            ),
+            dtype="int16",
+        ),
+        *op.args[1:],
+        **_edit_attrs(op.attrs, data_layout="NCHW"),
+    )
 
 
 @qnn_conv2d_alter_layout.register(["arm_cpu"])
 def alter_conv2d_layout(attrs, inputs, _tinfos, _out_type):
     """Adjust a qnn.conv2d and preceeding ops to better fit on Cortex-M.
     """
+    current_target = target.Target.current(allow_none=False)
+    if not "cortex-m" in current_target.mcpu:
+        return None
+
+    # Always cast to int16 and pick a our desired kernel layout - this won't affect anything
     data_expr, kernel_expr = inputs[:2]
-    data_int16 = relay.cast(data_expr, dtype="int16")
-    kernel_int16 = relay.cast(kernel_expr, dtype="int16")
+    is_depthwise = attrs.groups > 1
+    new_kernel_layout = "IOHW" if is_depthwise else "OHWI"
 
-    new_attrs = {k: attrs[k] for k in attrs.keys()}
-    if _is_qnn_op_depthwise_conv2d(attrs, inputs):
-        new_attrs["data_layout"] = "NCHW"
-        new_attrs["kernel_layout"] = "IOHW"
-        new_attrs["out_layout"] = attrs["out_layout"] or "NHWC"
+    op = relay.qnn.op.conv2d(
+        relay.cast(data_expr, dtype="int16"),
+        relay.cast(kernel_expr, dtype="int16"),
+        *inputs[2:],
+        **_edit_attrs(
+            attrs,
+            kernel_layout=new_kernel_layout,
+            out_layout="NHWC"
+        ),
+    )
 
-    else:
-        new_attrs["data_layout"] = "NHWC"
-        new_attrs["kernel_layout"] = "OHWI"
-        new_attrs["out_layout"] = attrs["out_layout"] or "NCHW"
+    # If possible, modify depthwise ops to take as input NCHW instead.
+    if is_depthwise and _prev_ops_match(op, ("cast", "qnn.requantize", "add", "qnn.conv2d")):
+        op = alter_depthwise_conv2d_layout(op)
+    elif is_depthwise:
+        print(op)
+        assert False
 
-
-    return relay.qnn.op.conv2d(data_int16, kernel_int16, *inputs[2:], **new_attrs)
+    return op
 
 
 @qnn_add_alter_layout.register(["arm_cpu"])
