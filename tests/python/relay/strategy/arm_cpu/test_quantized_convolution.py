@@ -95,6 +95,45 @@ def _get_mobilenet_v1_layer_attributes(layer_num):
     return ((1, 1, 1, 1), (1, 1), True)
 
 
+
+@pytest.mark.parametrize("layer", range(2, 27, 2))
+def test_infinite_bias_detection(interpreter, layer):
+    """Some models (cough cough MobileNetV1) have a tendency to allow some output channels of the
+    kernel to fill entirely with zeros. I do not know why anyone considers this acceptable, but here
+    we are. Frankly, I didn't even believe it - this test only exists to prove to myself that the
+    zero channels aren't some "feature", but rather a glaring engineering oversight.
+    """
+
+    _, kernel, bias, output = _load_tflite_layer(interpreter, layer)
+    kernel_data, kernel_quant = kernel
+    bias_data, bias_quant = bias
+    output_data, output_quant = output
+    is_depthwise = _get_mobilenet_v1_layer_attributes(layer)[2]
+    assert not is_depthwise
+    assert kernel_data.shape[1] == kernel_data.shape[2] == 1
+
+    out_channels = kernel_data.shape[3]
+    empty_out_channels = 0
+
+    out_zero_point = output_quant["zero_points"][0]
+    assert out_zero_point == -128
+
+    for i in range(out_channels):
+        # Skip over output channels with data
+        if any(kernel_data[i, 0, 0, :]):
+            continue
+        empty_out_channels += 1
+
+        scale = bias_quant["scales"][i] / output_quant["scales"][0]
+        channel_constant = round(bias_data[i] * scale + out_zero_point)
+        clipped = min(127, max(-128, channel_constant))
+
+        out_channel_values = output_data[0, :, :, i].flatten()
+        assert all(x == clipped for x in out_channel_values)
+
+    print(f"Layer {layer} had {empty_out_channels}/{out_channels} empty!")
+
+
 def _get_relu_activation_prefix(layer_num):
     if layer_num == 0:
         return "model/activation/Relu;"
