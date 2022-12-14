@@ -52,15 +52,19 @@ def alter_depthwise_conv2d_layout(op):
                         *prev_conv2d_op.args,
                         **_edit_attrs(prev_conv2d_op.attrs, out_layout="NCHW"),
                     ),
-                    add_op.args[1],
+                    relay.layout_transform(
+                        add_op.args[1],
+                        src_layout="NHWC",
+                        dst_layout="NCHW",
+                    )
                 ),
                 *requantize_op.args[1:],
-                **requantize_op.attrs,
+                **_edit_attrs(requantize_op.attrs, axis=1),
             ),
             dtype="int16",
         ),
         *op.args[1:],
-        **_edit_attrs(op.attrs, data_layout="NCHW"),
+        **_edit_attrs(op.attrs),
     )
 
 
