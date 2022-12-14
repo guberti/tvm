@@ -45,26 +45,30 @@ def alter_depthwise_conv2d_layout(op):
     add_op = requantize_op.args[0]
     prev_conv2d_op = add_op.args[0]
     return relay.qnn.op.conv2d(
-        relay.cast(
-            relay.qnn.op.requantize(
-                relay.op.add(
-                    relay.qnn.op.conv2d(
-                        *prev_conv2d_op.args,
-                        **_edit_attrs(prev_conv2d_op.attrs, out_layout="NCHW"),
+        relay.layout_transform(
+            relay.cast(
+                relay.qnn.op.requantize(
+                    relay.op.add(
+                        relay.qnn.op.conv2d(
+                            *prev_conv2d_op.args,
+                            **_edit_attrs(prev_conv2d_op.attrs, out_layout="NCHW"),
+                        ),
+                        relay.layout_transform(
+                            add_op.args[1],
+                            src_layout="NHWC",
+                            dst_layout="NCHW",
+                        )
                     ),
-                    relay.layout_transform(
-                        add_op.args[1],
-                        src_layout="NHWC",
-                        dst_layout="NCHW",
-                    )
+                    *requantize_op.args[1:],
+                    **_edit_attrs(requantize_op.attrs, axis=1),
                 ),
-                *requantize_op.args[1:],
-                **_edit_attrs(requantize_op.attrs, axis=1),
+                dtype="int16",
             ),
-            dtype="int16",
+            src_layout="NCHW",
+            dst_layout="NHWC",
         ),
         *op.args[1:],
-        **_edit_attrs(op.attrs),
+        **_edit_attrs(op.attrs, data_layout="NCHW"),
     )
 
 
@@ -95,9 +99,6 @@ def alter_conv2d_layout(attrs, inputs, _tinfos, _out_type):
     # If possible, modify depthwise ops to take as input NCHW instead.
     if is_depthwise and _prev_ops_match(op, ("cast", "qnn.requantize", "add", "qnn.conv2d")):
         op = alter_depthwise_conv2d_layout(op)
-    elif is_depthwise:
-        print(op)
-        assert False
 
     return op
 
