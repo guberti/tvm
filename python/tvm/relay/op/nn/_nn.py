@@ -877,7 +877,168 @@ def convert_deformable_conv2d(attrs, inputs, tinfos, desired_layouts):
     return relay.nn.deformable_conv2d(data, offset, weight, **new_attrs)
 
 
+import numpy as np
+
+def _prev_ops_match(curr_op, pattern):
+    prev_op = curr_op
+    for op_name in pattern:
+        print(f"Looking for {op_name}")
+        if (not hasattr(prev_op, "op")) or prev_op.op.name != op_name:
+            return False
+        prev_op = prev_op.args[0]
+        print("Found it!")
+    return True
+
+
+def _edit_attrs(attrs, **kwargs):
+    print(attrs)
+    return {**attrs, **kwargs}
+
+
+def change_numpy_layout(arr, src_layout, dst_layout):
+    assert src_layout.isalpha() and dst_layout.isalpha()
+    axis_order = [src_layout.index(c) for c in dst_layout]
+    return np.transpose(arr, axis_order)
+
+
+def _compute_fixed_conv2d_outputs(requantize_op):
+    """Compute all conv2d output values that do not depend on the layer input."""
+    bias_add_op = requantize_op.args[0]
+    conv2d_op = bias_add_op.args[0]
+
+    assert conv2d_op.attrs.kernel_layout.isalpha()
+    assert conv2d_op.attrs.groups == 1
+    kernel = conv2d_op.args[1].data.numpy()
+    oc_axis = conv2d_op.attrs.kernel_layout.index("O")
+
+    num_channels = kernel.shape[oc_axis]
+    rq_input_scale = requantize_op.args[1].data.numpy()
+    rq_output_scale = requantize_op.args[3].data.numpy().item()
+    rq_output_zero_point = requantize_op.args[4].data.numpy().item()
+    bias_data = bias_add_op.args[1].data.numpy()
+
+    fixed_outputs = {}
+
+    for i in range(num_channels):
+        if np.any(np.take(kernel, i, axis=oc_axis)):
+            continue
+        scale = rq_input_scale[i] / rq_output_scale
+        channel_constant = round(bias_data[i] * scale + rq_output_zero_point)
+        clipped = min(127, max(-128, channel_constant))
+        fixed_outputs[i] = clipped
+
+    return fixed_outputs
+
+
+def _compute_fixed_depthwise_outputs(requantize_op, fixed_channel_inputs):
+    """Compute all depthwise conv2d output values that do not depend on the PREVIOUS layer input."""
+    bias_add_op = requantize_op.args[0]
+    depthwise_op = bias_add_op.args[0]
+
+    assert depthwise_op.attrs.kernel_layout.isalpha()
+    assert depthwise_op.attrs.groups > 1
+    kernel = depthwise_op.args[1].data.numpy()
+    oc_axis = depthwise_op.attrs.kernel_layout.index("I")
+
+    num_channels = kernel.shape[oc_axis]
+    rq_input_scale = requantize_op.args[1].data.numpy()
+    rq_output_scale = requantize_op.args[3].data.numpy().item()
+    rq_output_zero_point = requantize_op.args[4].data.numpy().item()
+    bias_data = bias_add_op.args[1].data.numpy()
+
+    fixed_outputs = {}
+
+    for channel, fixed_input in fixed_channel_inputs.items():
+
+
+def _densify_conv2d_block(fixed_outputs, requantize_op):
+    bias_add_op = requantize_op.args[0]
+    conv2d_op = bias_add_op.args[0]
+
+    empty_channels = list(fixed_outputs.keys())
+    kernel_data = np.delete(conv2d_op.args[1].data.numpy(), empty_channels)
+    bias_data = np.delete(bias_add_op.args[1].data.numpy(), empty_channels)
+    scale_data = np.delete(requantize_op.args[1].data.numpy(), empty_channels)
+
+    return relay.qnn.op.requantize(
+        relay.op.bias_add(
+            relay.qnn.op.conv2d(
+                conv2d_op.args[0],
+                relay.Constant(nd.array(kernel_data)),
+                *conv2d_op.args[2:],
+                **conv2d_op.attrs,
+            ),
+            relay.Constant(nd.array(bias_data)),
+            **bias_add_op.attrs,
+        ),
+        relay.Constant(nd.array(scale_data)),
+        *requantize_op.args[2:],
+        **requantize_op.attrs,
+    )
+
+
+def _densify_depthwise(fixed_outputs, requantize_op, new_conv2d_op):
+    bias_add_op = requantize_op.args[0]
+    depthwise_conv2d_op = bias_add_op.args[0]
+
+    empty_channels = list(fixed_outputs.keys())
+    kernel_data = np.delete(conv2d_op.args[1].data.numpy(), empty_channels)
+    bias_data = np.delete(bias_add_op.args[1].data.numpy(), empty_channels)
+    scale_data = np.delete(requantize_op.args[1].data.numpy(), empty_channels)
+
+
 # QNN ops
+@reg.register_legalize("nn.bias_add")
+def legalize_qnn_conv2d(attrs, inputs, tinfos):
+    """Strip a special pattern of sparse channels.
+    """
+
+    if not _prev_ops_match(inputs[0], (
+        "qnn.conv2d",
+        "qnn.requantize",
+        "nn.bias_add",
+        "qnn.conv2d",
+        "qnn.requantize",
+        "nn.bias_add",
+        "qnn.conv2d"
+    )):
+        return None
+
+    current_conv = inputs[0]
+    depthwise_requantize = current_conv.args[0]
+    sparse_requantize = depthwise_conv2d.args[0].args[0].args[0]
+
+    # Current conv2d and optionally sparse conv2d must be regular conv2ds
+    # depthwise conv2d must be depthwise
+    if attrs.groups > 1 or depthwise_conv2d.attrs.groups == 1 or sparse_conv2d.attrs.groups > 1:
+        return None
+
+    # Layouts do not matter to us
+
+    fixed_conv2d_outputs = _compute_fixed_conv2d_outputs(sparse_requantize)
+    fixed_dw_outputs = _compute_fixed_depthwise_outputs(depthwise_requantize, fixed_conv2d_outputs)
+
+    # Ensure number of channels is divisible by two
+    if len(fixed_dw_outputs) % 2 > 0:
+        fixed_dw_outputs.popitem()
+
+    if not fixed_dw_outputs:
+        return None
+
+    densified_conv = _densify_conv2d_block(fixed_outputs, sparse_conv, sparse_bias, sparse_rq)
+    densified_depthwise = _densify_depthwise(fixed_outputs, inputs[0], densified_conv)
+
+    assert conv2d_op.attrs.kernel_layout.isalpha()
+    assert conv2d_op.attrs.groups == 1
+    kernel = conv2d_op.args[1].data.numpy()
+    oc_axis = conv2d_op.attrs.kernel_layout.index("O")
+    # We must modify the depthwise conv2d,
+
+    import pdb
+    pdb.set_trace()
+    return None
+
+
 @reg.register_alter_op_layout("qnn.conv2d")
 def alter_op_layout_qnn_conv2d(attrs, inputs, tinfos, out_type):
     """Alter the layout of a qnn conv2d op.

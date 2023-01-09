@@ -39,11 +39,93 @@ def _edit_attrs(attrs, **kwargs):
     return {**attrs, **kwargs}
 
 
-def alter_depthwise_conv2d_layout(op):
-    cast_op = op.args[0]
+def change_numpy_layout(arr, src_layout, dst_layout):
+    assert src_layout.isalpha() and dst_layout.isalpha()
+    axis_order = [src_layout.index(c) for c in dst_layout]
+    return np.transpose(arr, axis_order)
+
+
+def _squash_transformations(kernel_op):
+    if isinstance(kernel_op, relay.expr.Constant):
+        return kernel_op.data.numpy()
+    assert isinstance(kernel_op, relay.expr.Call)
+    assert len(kernel_op.args) == 1
+
+    prev_kernel = _squash_kernel_transformations(kernel_op.args[0])
+    attrs = kernel_op.attrs
+
+    if kernel_op.op.name == "layout_transform":
+        return change_numpy_layout(prev_kernel, attrs.src_layout, attrs.dst_layout)
+    elif kernel_op.op.name == "cast":
+        return prev_kernel.astype(attrs.dtype)
+    elif kernel.op.name == "expand_dims":
+        new_axes = range(attrs.axis, attrs.axis + attrs.num_newaxis)
+        return np.expand_dims(prev_kernel, tuple(axes))
+    else:
+        raise RuntimeError(f"Invalid kernel transformation '{kernel_op}'!")
+
+
+def _remove_empty_channels(source_array, channel_dim, factor=2):
+    """
+    """
+    assert channel_dim < 2
+    num_channels = source_array.shape[channel_dim]
+    non_empty_channels = []
+    indices = []
+
+    for i in range(num_channels):
+        channel = array.take(indices=i, axis=channel_dim)
+        if np.any(channel):
+            non_empty_channels.append(channel)
+            indices.append(i)
+
+
+    '''lowest_empty_channel = 0
+    while indices % factor != 0:
+        # Find the lowest index that is empty
+        while lowest_empty_channel in indices:
+            lowest_empty_channel += 1
+
+
+        lowest_empty_channel = min(set(range(num_channels)) - indices)
+        non_empty_channels.append(lowest_empty_channel)
+        indices.add(lowest_empty_channel)'''
+
+    print(f"Slicing away empty channels kept {len(non_empty_channels)}/{num_channels} channels!")
+    return np.stack(non_empty_channels, axis=channel_dim), indices
+
+
+def _compute_fixed_conv2d_outputs(conv2d_op, add_op, requantize_op):
+    """Compute all conv2d output values that do not depend on the layer input."""
+
+    assert conv2d_op.attrs.kernel_layout == "OHWI"
+    assert conv2d_op.attrs.groups == 1
+    kernel = _squash_transformations(conv2d_op.args[1])
+
+    num_channels = kernel.shape[3]
+    rq_input_scale = requantize_op.args[1].data.numpy()
+    rq_output_scale = requantize_op.args[3].data.numpy().item()
+    bias_data = _squash_transformations(add_op.args[1]).flatten()
+
+    outputs = {}
+
+    for i in range(num_channels):
+        if np.any(kernel[i, :, :, :]):
+            continue
+        scale = rq_input_scale[i] / rq_output_scale
+        channel_constant = round(bias_data[i] * scale + out_zero_point)
+        clipped = min(127, max(-128, channel_constant))
+        outputs[i] = clipped
+
+    return kernel, outputs
+
+
+def alter_depthwise_conv2d_layout(depthwise_conv2d):
+    cast_op = depthwise_conv2d.args[0]
     requantize_op = cast_op.args[0]
     add_op = requantize_op.args[0]
     prev_conv2d_op = add_op.args[0]
+
     return relay.qnn.op.conv2d(
         relay.layout_transform(
             relay.cast(
@@ -67,9 +149,16 @@ def alter_depthwise_conv2d_layout(op):
             src_layout="NCHW",
             dst_layout="NHWC",
         ),
-        *op.args[1:],
-        **_edit_attrs(op.attrs, data_layout="NCHW"),
+        *depthwise_conv2d.args[1:],
+        **_edit_attrs(depthwise_conv2d.attrs, data_layout="NCHW"),
     )
+
+
+def strip_zero_conv2d_channels(regular_conv2d):
+    """Replaces a conv2d op with all zero channels with an equivalent dense operator.
+
+    We must operate on (regular -> depthwise -> regular) sequences of conv2d blocks.
+    """
 
 
 @qnn_conv2d_alter_layout.register(["arm_cpu"])

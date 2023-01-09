@@ -113,16 +113,15 @@ def test_infinite_bias_detection(interpreter, layer):
     assert kernel_data.shape[1] == kernel_data.shape[2] == 1
 
     out_channels = kernel_data.shape[3]
-    empty_out_channels = 0
+    fixed_channels = {}
 
     out_zero_point = output_quant["zero_points"][0]
     assert out_zero_point == -128
 
     for i in range(out_channels):
         # Skip over output channels with data
-        if any(kernel_data[i, 0, 0, :]):
+        if np.any(kernel_data[i, 0, 0, :]):
             continue
-        empty_out_channels += 1
 
         scale = bias_quant["scales"][i] / output_quant["scales"][0]
         channel_constant = round(bias_data[i] * scale + out_zero_point)
@@ -130,8 +129,30 @@ def test_infinite_bias_detection(interpreter, layer):
 
         out_channel_values = output_data[0, :, :, i].flatten()
         assert all(x == clipped for x in out_channel_values)
+        fixed_channels[i] = clipped
+    print(f"Layer {layer} had {len(fixed_channels)}/{out_channels} empty!")
 
-    print(f"Layer {layer} had {empty_out_channels}/{out_channels} empty!")
+    # We now need to compute values for the following depthwise layer
+    if layer == 26:
+        return
+
+    _, kernel, bias, output = _load_tflite_layer(interpreter, layer + 1)
+    kernel_data, kernel_quant = kernel
+    bias_data, bias_quant = bias
+    output_data, output_quant = output
+    is_depthwise = _get_mobilenet_v1_layer_attributes(layer + 1)[2]
+    assert is_depthwise
+
+    for i, value in fixed_channels.items():
+        print(i)
+        assert np.all(output_data[:, :, :, i] == output_data[0, 0, 0, i])
+        print(output_data[0, 0, 0, i])
+
+    for i in range(out_channels):
+        print(kernel_data.shape)
+        # Skip over output channels with data
+        assert np.any(kernel_data[:, :, :, i])
+
 
 
 def _get_relu_activation_prefix(layer_num):
