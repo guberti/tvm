@@ -965,6 +965,7 @@ def _compute_fixed_depthwise_outputs(requantize_op, fixed_channel_inputs):
         clipped = np.clip(rounded + rq_output_zero_point, -128, 127)
 
         # TODO - this is kinda paranoid and I think it removes too many. Make sure this is accurate.
+        # This bug likely causes a ~5% performance reduction
         if np.all(clipped == clipped[0, 0]):
             fixed_outputs[i] = clipped[0, 0]
         else:
@@ -992,9 +993,6 @@ def _excise_conv2d_channels(empty_channels, input_op, requantize_op, is_depthwis
     else:
         num_groups = 1
 
-    #import pdb
-    #pdb.set_trace()
-
     return relay.qnn.op.requantize(
         relay.nn.bias_add(
             relay.qnn.op.conv2d(
@@ -1013,7 +1011,27 @@ def _excise_conv2d_channels(empty_channels, input_op, requantize_op, is_depthwis
     )
 
 
-def _fold_into_bias(fixed_inputs, conv2d_op, input_op):
+def _excise_avg_pool_channels(empty_channels, input_op, first_reshape_op, axis=1):
+    outer_cast = first_reshape_op.args[0].args[0]
+    avg_pool = outer_cast.args[0]
+    inner_cast = avg_pool.args[0]
+
+    new_shape = list(get_const_tuple(first_reshape_op.attrs.newshape))
+    new_shape[axis] -= len(empty_channels)
+
+    return relay.reshape(
+        relay.cast(
+            relay.nn.avg_pool2d(
+                relay.cast(input_op, **inner_cast.attrs),
+                **avg_pool.attrs
+            ),
+            **outer_cast.attrs
+        ),
+        **_edit_attrs(first_reshape_op.attrs, newshape=new_shape)
+    )
+
+
+def _fold_into_conv_bias(fixed_inputs, conv2d_op, input_op):
     assert not any(get_const_tuple(conv2d_op.attrs.padding))
     in_axis = conv2d_op.attrs.kernel_layout.index("I")
     out_axis = conv2d_op.attrs.kernel_layout.index("O")
@@ -1030,7 +1048,7 @@ def _fold_into_bias(fixed_inputs, conv2d_op, input_op):
         # For every input channel that is being removed:
         for j, val in fixed_inputs.items():
             kernel_slice = np.take(out_kernel_slice, j, axis=in_axis)
-            accumulator = np.sum((kernel_slice - zero_point) * val)
+            accumulator = np.sum(kernel_slice * (val - zero_point))
             extra_bias[i] += accumulator
 
     stripped_kernel = np.delete(kernel, tuple(fixed_inputs.keys()), axis=in_axis)
@@ -1044,41 +1062,40 @@ def _fold_into_bias(fixed_inputs, conv2d_op, input_op):
     return new_conv, extra_bias
 
 
-# QNN ops
-@reg.register_legalize("nn.bias_add")
-def legalize_qnn_conv2d(attrs, inputs, tinfos):
-    """Strip a special pattern of sparse channels.
-    """
 
-    if not _prev_ops_match(inputs[0], (
-        "qnn.conv2d",
-        "qnn.requantize",
-        "nn.bias_add",
-        "qnn.conv2d",
-        "qnn.requantize",
-        "nn.bias_add",
-        "qnn.conv2d"
-    )):
-        return None
+def _fold_into_dense_bias(fixed_inputs, dense_op, input_op, channel_axis=1):
+    weights = dense_op.args[1].data.numpy()
+    assert channel_axis < 2
+    assert len(weights.shape) == 2
+    zero_point = dense_op.args[2].data.numpy().item()
 
+    extra_bias = np.zeros((weights.shape[1 - channel_axis],), dtype="int32")
+
+    # For every output channel
+    for i in range(weights.shape[1 - channel_axis]):
+        out_weights_slice = np.take(weights, i, axis=1 - channel_axis)
+
+        # For every input channel that is being removed:
+        for j, val in fixed_inputs.items():
+            weight = out_weights_slice[j]
+            extra_bias[i] += (val - zero_point) * weight
+
+    stripped_weights = np.delete(weights, tuple(fixed_inputs.keys()), axis=channel_axis)
+    new_dense = relay.qnn.op.dense(
+        input_op,
+        relay.Constant(nd.array(stripped_weights)),
+        *dense_op.args[2:],
+        **dense_op.attrs,
+    )
+
+    return new_dense, extra_bias
+
+
+def _densify_cdc_pattern(attrs, inputs):
     current_conv = inputs[0]
     depthwise_requantize = current_conv.args[0]
-    depthwise_conv2d = depthwise_requantize.args[0].args[0]
-    top_requantize = depthwise_conv2d.args[0]
+    top_requantize = depthwise_requantize.args[0].args[0].args[0]
     top_conv2d = top_requantize.args[0].args[0]
-
-    # Current conv2d and optionally sparse conv2d must be regular conv2ds depthwise conv2d must be
-    # depthwise. Bottom convolution must be unpadded.
-    if (
-        any(get_const_tuple(current_conv.attrs.padding)) or
-        current_conv.attrs.groups > 1 or
-        depthwise_conv2d.attrs.groups == 1 or
-        top_conv2d.attrs.groups > 1
-    ):
-        return None
-
-    if current_conv.attrs.channels != 256 or top_conv2d.attrs.channels != 256:
-        return None
 
     fixed_conv2d_outputs = _compute_fixed_conv2d_outputs(top_requantize)
     fixed_dw_outputs = _compute_fixed_depthwise_outputs(depthwise_requantize, fixed_conv2d_outputs)
@@ -1093,13 +1110,81 @@ def legalize_qnn_conv2d(attrs, inputs, tinfos):
     unneeded_channels = tuple(fixed_dw_outputs.keys())
     new_top_conv2d = _excise_conv2d_channels(unneeded_channels, top_conv2d.args[0], top_requantize)
     new_dw_conv2d = _excise_conv2d_channels(unneeded_channels, new_top_conv2d, depthwise_requantize, is_depthwise=True)
-    new_conv, extra_bias = _fold_into_bias(fixed_dw_outputs, current_conv, new_dw_conv2d)
+    new_conv, extra_bias = _fold_into_conv_bias(fixed_dw_outputs, current_conv, new_dw_conv2d)
 
     new_bias = inputs[1].data.numpy() + extra_bias
     new_op = relay.nn.bias_add(new_conv, relay.Constant(nd.array(new_bias)), **attrs)
-    print(new_op)
-    print("----" * 10000)
     return new_op
+
+
+def _densify_cpd_pattern(attrs, inputs):
+    first_reshape = inputs[0].args[0]
+    top_requantize = first_reshape.args[0].args[0].args[0].args[0].args[0]
+    top_conv2d = top_requantize.args[0].args[0]
+
+
+    fixed_conv2d_outputs = _compute_fixed_conv2d_outputs(top_requantize)
+
+    # Ensure number of channels is divisible by two
+    if len(fixed_conv2d_outputs) % 2 > 0:
+        fixed_dw_outputs.popitem()
+
+    if not fixed_conv2d_outputs:
+        return None
+
+    unneeded_channels = tuple(fixed_conv2d_outputs.keys())
+    new_top_conv2d = _excise_conv2d_channels(unneeded_channels, top_conv2d.args[0], top_requantize)
+    new_avg_pool = _excise_avg_pool_channels(unneeded_channels, new_top_conv2d, first_reshape)
+    new_conv, extra_bias = _fold_into_dense_bias(fixed_conv2d_outputs, inputs[0], new_avg_pool)
+
+    new_bias = inputs[1].data.numpy() + extra_bias
+    new_op = relay.nn.bias_add(new_conv, relay.Constant(nd.array(new_bias)), **attrs)
+    return new_op
+
+
+# QNN ops
+@reg.register_legalize("nn.bias_add")
+def legalize_bias_add(attrs, inputs, _tinfos):
+    """Strip a special pattern of sparse channels.
+    """
+
+    if _prev_ops_match(inputs[0], (
+        "qnn.conv2d",
+        "qnn.requantize",
+        "nn.bias_add",
+        "qnn.conv2d",
+        "qnn.requantize",
+        "nn.bias_add",
+        "qnn.conv2d"
+    )):
+        current_conv = inputs[0]
+        depthwise_conv2d = current_conv.args[0].args[0].args[0]
+        top_conv2d = depthwise_conv2d.args[0].args[0].args[0]
+        if (
+            not any(get_const_tuple(current_conv.attrs.padding)) and
+            current_conv.attrs.groups == 1 and
+            depthwise_conv2d.attrs.groups > 1 and
+            top_conv2d.attrs.groups == 1
+        ):
+            return _densify_cdc_pattern(attrs, inputs)
+
+    if _prev_ops_match(inputs[0], (
+        "qnn.dense",
+        "reshape",
+        "reshape",
+        "cast",
+        "nn.avg_pool2d",
+        "cast",
+        "qnn.requantize",
+        "nn.bias_add",
+        "qnn.conv2d"
+    )):
+        avg_pool = inputs[0].args[0].args[0].args[0].args[0]
+        top_requantize = avg_pool.args[0].args[0]
+        top_conv2d = top_requantize.args[0].args[0]
+        if (top_conv2d.attrs.groups == 1):
+            return _densify_cpd_pattern(attrs, inputs)
+
 
 @reg.register_alter_op_layout("qnn.conv2d")
 def alter_op_layout_qnn_conv2d(attrs, inputs, tinfos, out_type):
