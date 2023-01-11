@@ -412,6 +412,154 @@ def qnn_depthwise_conv2d(attrs, inputs, out_type):
     return [output]
 
 
+def qnn_explicit_depthwise_conv2d(attrs, inputs, out_type):
+    assert len(inputs) == 11
+    assert attrs.out_layout == "NHWC"
+    y_stride, x_stride = get_const_tuple(attrs.strides)
+    assert y_stride == x_stride == 1
+
+    data, kernel, _izp, _kzp, _iscale, _kscale, bias, scale = inputs[0:8]
+    rq_output_zero_point_const = inputs[10]
+    assert len(rq_output_zero_point_const.op.body) == 1
+    output_zero_point = rq_output_zero_point_const.op.body[0]
+    _, out_channels, kernel_h, kernel_w = get_const_tuple(kernel.shape)
+
+    rq_input_zero_point_const = -128
+    padding = get_const_tuple(attrs.padding)
+    if any(padding):
+        pad_up, pad_left, pad_down, pad_right = padding
+        padded_data = pad(
+            data,
+            [0, 0, pad_up, pad_left],
+            [0, 0, pad_down, pad_right],
+            rq_input_zero_point_const,
+        )
+    else:
+        padded_data = data
+
+    _, _, height, width = get_const_tuple(padded_data.shape)
+    out_height = _compute_output_dim(height, kernel_h, y_stride)
+    out_width = _compute_output_dim(width, kernel_w, x_stride)
+
+
+    dimensions = (width, kernel_h, kernel_w)
+    x_strides = (1, out_channels)
+
+    # data, kernel
+    impls = []
+    for alignment in ((0, 0, 0), (0, 1, 0), (1, 0, 0), (1, 1, 0)):
+        impl = tensordot.tensordot_int16_impl(
+            out_width, dimensions, alignment, x_strides, output_zero_point=output_zero_point
+        )
+        impls.append(impl)
+
+    code = "\n".join(impl[1] for impl in impls)
+    func_names = list(impl[0] for impl in impls)
+
+    def data_ptr(buffer, y, c, offset=0):
+        return _make_tscript_ptr(buffer, c * const(width * height) + y * const(width) - offset, 1)
+
+    def kernel_ptr(buffer, c, offset=0):
+        return _make_tscript_ptr(buffer, c * const(kernel_h * kernel_w) - offset, 1)
+
+    def output_ptr(output, y, c):
+        return _make_tscript_ptr(output, y * const(out_width * out_channels) + c, 1)
+
+    def bias_ptr(bias, c):
+        return _make_tscript_ptr(bias, c, 1, dtype="int32")
+
+    def scale_ptr(scale, c):
+        return _make_tscript_ptr(scale, c, 1, dtype="int32")
+
+
+    data_shape, kernel_shape = data.shape, kernel.shape
+    bias_shape, scale_shape = bias.shape, scale.shape
+    output_shape = out_type.shape
+
+    print(data_shape)
+    assert get_const_tuple(data_shape) == (1, 256, 5, 5)
+
+    @T.prim_func
+    def prim_func(
+        data_handle: T.handle,
+        kernel_handle: T.handle,
+        bias_handle: T.handle,
+        scale_handle: T.handle,
+        output_handle: T.handle,
+    ) -> None:
+
+        T.func_attr({"global_symbol": "main", "tir.noalias": True})
+        data = T.match_buffer(data_handle, data_shape, dtype="int16")
+        kernel = T.match_buffer(kernel_handle, kernel_shape, dtype="int16")
+        bias = T.match_buffer(bias_handle, bias_shape, dtype="int32")
+        scale = T.match_buffer(scale_handle, scale_shape)
+        output = T.match_buffer(output_handle, output_shape, dtype="int16")
+
+        output[0, 0, 0, 0] = 0
+        __1 = data[0, 0, 0, 0]
+        __2 = kernel[0, 0, 0, 0]
+        __3 = bias[0, 0, 0, 0]
+        __4 = scale[0]
+        # pylint: enable=unused-variable
+
+        for c_ax in T.grid(const(128)):
+            with T.block("conv2d_aligned"):
+                T.block_attr({"pragma_import_c": code})
+                c = T.axis.remap("S", [c_ax])
+                _make_tscript_call(
+                    func_names[0],
+                    output_ptr(output, 0, c * 2),
+                    data_ptr(data, 0, c * 2),
+                    kernel_ptr(kernel, c * 2),
+                    bias_ptr(bias, c * 2),
+                    scale_ptr(scale, c * 2),
+                )
+                _make_tscript_call(
+                    func_names[3],
+                    output_ptr(output, 1, c * 2),
+                    data_ptr(data, 1, c * 2, offset=1),
+                    kernel_ptr(kernel, c * 2),
+                    bias_ptr(bias, c * 2),
+                    scale_ptr(scale, c * 2),
+                )
+                _make_tscript_call(
+                    func_names[0],
+                    output_ptr(output, 2, c * 2),
+                    data_ptr(data, 2, c * 2),
+                    kernel_ptr(kernel, c * 2),
+                    bias_ptr(bias, c * 2),
+                    scale_ptr(scale, c * 2),
+                )
+                _make_tscript_call(
+                    func_names[2],
+                    output_ptr(output, 0, c * 2 + 1),
+                    data_ptr(data, 0, c * 2 + 1, offset=1),
+                    kernel_ptr(kernel, c * 2 + 1, offset=1),
+                    bias_ptr(bias, c * 2 + 1),
+                    scale_ptr(scale, c * 2 + 1),
+                )
+                _make_tscript_call(
+                    func_names[1],
+                    output_ptr(output, 1, c * 2 + 1),
+                    data_ptr(data, 1, c * 2 + 1),
+                    kernel_ptr(kernel, c * 2 + 1, offset=1),
+                    bias_ptr(bias, c * 2 + 1),
+                    scale_ptr(scale, c * 2 + 1),
+                )
+                _make_tscript_call(
+                    func_names[2],
+                    output_ptr(output, 2, c * 2 + 1),
+                    data_ptr(data, 2, c * 2 + 1, offset=1),
+                    kernel_ptr(kernel, c * 2 + 1, offset=1),
+                    bias_ptr(bias, c * 2 + 1),
+                    scale_ptr(scale, c * 2 + 1),
+                )
+
+    output = te.extern_primfunc([data, kernel, bias, scale], prim_func, name="tir", dtype="int16")
+    return [output]
+
+
+
 def schedule_qnn_depthwise_conv2d(_attrs, _outs, _target):
     """Schedule function for qnn.depthwise_conv2d."""
     return None
