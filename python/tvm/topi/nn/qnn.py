@@ -213,6 +213,26 @@ def qnn_conv2d_alter_layout(_attrs, _inputs, _tinfos, _out_type):
 
 
 @tvm.target.generic_func
+def qnn_bias_add_legalize(_attrs, _inputs, _tinfos):
+    """Legalize bias_add layout.
+
+    Bias add is not a QNN-specific function, but this generic exists so that empty channels can
+    be excised from quantized conv2d operators and folded into bias adds.
+
+    Parameters
+    ----------
+    attrs : tvm.ir.Attrs
+        Attributes of current convolution
+    inputs : tvm.relay.Expr
+        Grouped input symbols
+    tinfos : list
+        Input shape and dtype
+
+    """
+    return None
+
+
+@tvm.target.generic_func
 def qnn_add_alter_layout(_attrs, _inputs, _tinfos, _out_type):
     """Change add layout.
 

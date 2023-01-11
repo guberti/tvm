@@ -110,4 +110,3 @@ def qnn_conv2d_strategy_arm_cpu(attrs, inputs, _out_type, target):
         raise TVMError("No Arm Cortex-M DSP strategy exists for generic group qnn.conv2d")
 
     return strategy
-

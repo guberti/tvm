@@ -95,13 +95,11 @@ def _get_mobilenet_v1_layer_attributes(layer_num):
     return ((1, 1, 1, 1), (1, 1), True)
 
 
-
 @pytest.mark.parametrize("layer", range(2, 27, 2))
 def test_infinite_bias_detection(interpreter, layer):
-    """Some models (cough cough MobileNetV1) have a tendency to allow some output channels of the
-    kernel to fill entirely with zeros. I do not know why anyone considers this acceptable, but here
-    we are. Frankly, I didn't even believe it - this test only exists to prove to myself that the
-    zero channels aren't some "feature", but rather a glaring engineering oversight.
+    """Some models (mainly MobileNetV1) have kernels with many output channels full entirely of
+    zeroes. The VWW mdoel is one of these. This test confirms that the outputs of these channels,
+    as computed by TensorFlow, are indeed not dependent upon the input values.
     """
 
     _, kernel, bias, output = _load_tflite_layer(interpreter, layer)
@@ -152,7 +150,6 @@ def test_infinite_bias_detection(interpreter, layer):
         print(kernel_data.shape)
         # Skip over output channels with data
         assert np.any(kernel_data[:, :, :, i])
-
 
 
 def _get_relu_activation_prefix(layer_num):
