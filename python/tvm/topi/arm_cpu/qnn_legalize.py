@@ -315,7 +315,7 @@ def legalize_bias_add(attrs, inputs, _tinfos):
             and depthwise_conv2d.attrs.groups > 1
             and top_conv2d.attrs.groups == 1
         ):
-            return _densify_cdc_pattern(attrs, inputs)
+            return _densify_conv_depthwise_conv_pattern(attrs, inputs)
 
     if prev_ops_match(
         inputs[0],
@@ -335,6 +335,6 @@ def legalize_bias_add(attrs, inputs, _tinfos):
         top_requantize = avg_pool.args[0].args[0]
         top_conv2d = top_requantize.args[0].args[0]
         if top_conv2d.attrs.groups == 1:
-            return _densify_cpd_pattern(attrs, inputs)
+            return _densify_conv_pool_dense_pattern(attrs, inputs)
 
     return None

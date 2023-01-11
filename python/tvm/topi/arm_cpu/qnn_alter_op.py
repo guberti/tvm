@@ -25,9 +25,9 @@ from ..nn import *
 def prev_ops_match(curr_op, pattern):
     prev_op = curr_op
     for op_name in pattern:
-        prev_op = prev_op.args[0]
         if (not hasattr(prev_op, "op")) or prev_op.op.name != op_name:
             return False
+        prev_op = prev_op.args[0]
     return True
 
 
@@ -41,7 +41,27 @@ def change_numpy_layout(arr, src_layout, dst_layout):
     return np.transpose(arr, axis_order)
 
 
-def alter_depthwise_conv2d_layout(depthwise_conv2d):
+def _squash_transformations(expr):
+    if isinstance(expr, relay.expr.Constant):
+        return expr.data.numpy()
+    assert isinstance(expr, relay.expr.Call)
+    assert len(expr.args) == 1
+
+    prev_kernel = _squash_transformations(expr.args[0])
+    attrs = expr.attrs
+
+    if expr.op.name == "layout_transform":
+        return change_numpy_layout(prev_kernel, attrs.src_layout, attrs.dst_layout)
+    elif expr.op.name == "cast":
+        return prev_kernel.astype(attrs.dtype)
+    elif kernel.op.name == "expand_dims":
+        new_axes = range(attrs.axis, attrs.axis + attrs.num_newaxis)
+        return np.expand_dims(prev_kernel, tuple(axes))
+    else:
+        raise RuntimeError(f"Invalid kernel transformation '{expr}'!")
+
+
+def _alter_depthwise_conv2d_layout(depthwise_conv2d):
     cast_op = depthwise_conv2d.args[0]
     requantize_op = cast_op.args[0]
     add_op = requantize_op.args[0]
@@ -95,8 +115,8 @@ def alter_conv2d_layout(attrs, inputs, _tinfos, _out_type):
     )
 
     # If possible, modify depthwise ops to take as input NCHW instead.
-    if is_depthwise and prev_ops_match(op, ("cast", "qnn.requantize", "add", "qnn.conv2d")):
-        op = alter_depthwise_conv2d_layout(op)
+    if is_depthwise and prev_ops_match(op.args[0], ("cast", "qnn.requantize", "add", "qnn.conv2d")):
+        op = _alter_depthwise_conv2d_layout(op)
 
     return op
 
@@ -108,11 +128,8 @@ def alter_add_layout(_attrs, inputs, _tinfos, _out_type):
     Currently only supports qnn.conv2d, but qnn.dense support should be added. Note that this
     optimization means we must pad tensors with the input zero point, and NOT with zero.
     """
-    return None
     prev_op, biases_data_op = inputs
-    if not hasattr(prev_op, "op"):
-        return None
-    if prev_op.op.name != "qnn.conv2d":
+    if not prev_ops_match(inputs[0], ("qnn.conv2d",)):
         return None
 
     # We should not perform this alteration if the target has a uint * int SIMD MAC operation (since
@@ -123,9 +140,9 @@ def alter_add_layout(_attrs, inputs, _tinfos, _out_type):
         return None
 
     conv_input_zp = prev_op.args[2].data.numpy().item()
-    kernel = prev_op.args[1].data.numpy()
+    kernel = _squash_transformations(prev_op.args[1])
 
-    if _is_qnn_op_depthwise_conv2d(prev_op.attrs, prev_op.args):
+    if prev_op.attrs.groups == prev_op.attrs.channels:
         axes_to_sum = "HW"
     elif prev_op.attrs.groups == 1:
         axes_to_sum = "HWI"
