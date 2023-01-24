@@ -27,7 +27,6 @@ import tvm
 from tvm import te, TVMError
 from tvm.script import tir as T
 from tvm.tir import const
-from tvm.topi.nn.pad import pad
 
 from ..utils import get_const_tuple
 from .mprofile.dsp.micro_kernel import tensordot

@@ -22,7 +22,13 @@ from tvm import topi, TVMError
 from .. import strategy
 from ...op.op import register_compute
 from ...op.op import register_injective_schedule
-from ...op.op import register_strategy, register_pattern, register_alter_op_layout, register_legalize, OpPattern
+from ...op.op import (
+    OpPattern,
+    register_alter_op_layout,
+    register_legalize,
+    register_pattern,
+    register_strategy,
+)
 
 
 @register_compute("qnn.simulated_quantize")
@@ -88,10 +94,10 @@ register_strategy("qnn.conv2d", strategy.qnn_conv2d_strategy)
 def _get_clip_dtype_bounds(dtype):
     """Returns the minimum and maximum values of a C integer data type."""
     assert "int" in dtype
-    bits = int(dtype[dtype.find("int") + 3:])
+    bits = int(dtype[dtype.find("int") + 3 :])
 
     if dtype.startswith("int"):
-        return (-2**(bits - 1), 2**(bits - 1) - 1)
+        return (-(2 ** (bits - 1)), 2 ** (bits - 1) - 1)
     elif dtype.startswith("uint"):
         return (0, 2**bits - 1)
     else:

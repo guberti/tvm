@@ -19,9 +19,12 @@
 import numpy as np
 
 from tvm import nd, relay, target
-from ..nn import *
 from ..utils import get_const_tuple
-
+from ..nn import (
+    qnn_conv2d_alter_layout,
+    qnn_add_alter_layout,
+    qnn_requantize_alter_layout
+)
 
 def prev_ops_match(curr_op, pattern):
     prev_op = curr_op
@@ -57,7 +60,7 @@ def _squash_transformations(expr):
         return prev_kernel.astype(attrs.dtype)
     elif kernel.op.name == "expand_dims":
         new_axes = range(attrs.axis, attrs.axis + attrs.num_newaxis)
-        return np.expand_dims(prev_kernel, tuple(axes))
+        return np.expand_dims(prev_kernel, tuple(new_axes))
     else:
         raise RuntimeError(f"Invalid kernel transformation '{expr}'!")
 
