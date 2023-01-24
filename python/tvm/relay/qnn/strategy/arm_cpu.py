@@ -32,8 +32,9 @@ from .generic import (
     wrap_compute_dequantize,
     wrap_compute_quantize,
     wrap_topi_qnn_dense,
-    wrap_topi_schedule
+    wrap_topi_schedule,
 )
+
 
 @qnn_quantize_strategy.register("arm_cpu")
 def qnn_quantize_strategy_arm_cpu(_attrs, _inputs, _out_type, _target):

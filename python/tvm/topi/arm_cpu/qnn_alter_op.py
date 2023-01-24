@@ -20,11 +20,8 @@ import numpy as np
 
 from tvm import nd, relay, target
 from ..utils import get_const_tuple
-from ..nn import (
-    qnn_conv2d_alter_layout,
-    qnn_add_alter_layout,
-    qnn_requantize_alter_layout
-)
+from ..nn import qnn_conv2d_alter_layout, qnn_add_alter_layout, qnn_requantize_alter_layout
+
 
 def prev_ops_match(curr_op, pattern):
     prev_op = curr_op

@@ -36,6 +36,7 @@ from tvm import nd, relay
 from .qnn_alter_op import prev_ops_match, edit_attrs
 from ..nn import qnn_bias_add_legalize
 
+
 def _compute_fixed_conv2d_outputs(requantize_op):
     """Compute all conv2d output values that do not depend on the layer input."""
     bias_add_op = requantize_op.args[0]
