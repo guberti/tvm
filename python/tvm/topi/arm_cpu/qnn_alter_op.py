@@ -116,8 +116,8 @@ def alter_conv2d_layout(attrs, inputs, _tinfos, _out_type):
     )
 
     # If possible, modify depthwise ops to take as input NCHW instead.
-    #if is_depthwise and prev_ops_match(op.args[0], ("cast", "qnn.requantize", "add", "qnn.conv2d")):
-    #    op = _alter_depthwise_conv2d_layout(op)
+    if is_depthwise and prev_ops_match(op.args[0], ("cast", "qnn.requantize", "add", "qnn.conv2d")):
+        op = _alter_depthwise_conv2d_layout(op)
 
     return op
 

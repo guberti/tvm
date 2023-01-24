@@ -262,7 +262,7 @@ def qnn_conv2d(attrs, inputs, out_type):
     # Make a few checks to unpack the function arguments and ensure it was called with the right
     # arguments. Note that unlike most schedules, qnn_conv2d does not use a wrapper.
     assert len(inputs) == 11
-    assert not any(get_const_tuple(attrs.paddding))
+    assert not any(get_const_tuple(attrs.padding))
 
     data, kernel, _izp, _kzp, _iscale, _kscale, bias, scale = inputs[0:8]
     _, height, width, in_channels = get_const_tuple(data.shape)
@@ -339,7 +339,7 @@ def qnn_depthwise_conv2d(attrs, inputs, out_type):
     """
 
     assert len(inputs) == 11
-    assert not any(get_const_tuple(attrs.paddding))
+    assert not any(get_const_tuple(attrs.padding))
     data, kernel, _izp, _kzp, _iscale, _kscale, bias, scale = inputs[0:8]
     _, _, height, width = get_const_tuple(data.shape)
     _, out_channels, kernel_h, kernel_w = get_const_tuple(kernel.shape)
@@ -473,7 +473,7 @@ def qnn_unrolled_depthwise_conv2d(attrs, inputs, out_type):
     """
 
     assert len(inputs) == 11
-    assert not any(get_const_tuple(attrs.paddding))
+    assert not any(get_const_tuple(attrs.padding))
     y_stride, x_stride = get_const_tuple(attrs.strides)
     assert y_stride == x_stride == 1
 
